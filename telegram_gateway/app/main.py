@@ -13,6 +13,7 @@ import httpx
 
 from .config import get_settings, Settings
 from .session_manager import SessionManager
+from .database import Database
 from .rate_limiter import RateLimiter
 from .api_client import InternalAPIClient
 from .router import TelegramRouter
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Global instances
 session_manager: SessionManager
+database: Database
 rate_limiter: RateLimiter
 api_client: InternalAPIClient
 router: TelegramRouter
@@ -58,7 +60,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     
     # Initialize components
-    session_manager = SessionManager(settings)
+    database = Database()
+    session_manager = SessionManager(settings, database)
     rate_limiter = RateLimiter(settings)
     api_client = InternalAPIClient(settings)
     router = TelegramRouter(api_client)

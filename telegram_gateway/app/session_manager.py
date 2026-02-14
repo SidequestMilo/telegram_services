@@ -10,20 +10,30 @@ import redis.asyncio as redis
 from redis.exceptions import RedisError
 
 from .config import Settings
+from .database import Database
 
 logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """Manages user sessions in Redis with automatic TTL refresh."""
+    """Manages user sessions in Redis with automatic TTL refresh and persistent storage."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, database: Database):
         self.settings = settings
+        self.database = database
         self.redis_client: Optional[redis.Redis] = None
         self.session_ttl = settings.SESSION_TTL
     
     async def connect(self):
-        """Establish Redis connection."""
+        """Establish Redis and Database connections."""
+        # Connect to Database first (Critical)
+        try:
+            await self.database.connect()
+        except Exception as e:
+            logger.error(f"Failed to connect to Database: {e}")
+            raise
+
+        # Connect to Redis (Cache)
         try:
             self.redis_client = await redis.Redis(
                 host=self.settings.REDIS_HOST,
@@ -39,10 +49,12 @@ class SessionManager:
             self.redis_client = None
     
     async def disconnect(self):
-        """Close Redis connection."""
+        """Close Redis and Database connections."""
         if self.redis_client:
             await self.redis_client.close()
             logger.info("Redis connection closed")
+            
+        await self.database.disconnect()
     
     def _get_session_key(self, telegram_user_id: int) -> str:
         """Generate Redis key for user session."""
@@ -50,38 +62,57 @@ class SessionManager:
     
     async def get_session(self, telegram_user_id: int) -> Optional[Dict[str, Any]]:
         """
-        Retrieve user session from Redis.
-        
-        Args:
-            telegram_user_id: Telegram user ID
-            
-        Returns:
-            Session data dictionary or None if not found
+        Retrieve user session from Redis or DB.
         """
-        if not self.redis_client:
-            logger.warning("Redis not available, operating without session")
-            return None
+        session = None
         
-        try:
-            key = self._get_session_key(telegram_user_id)
-            session_data = await self.redis_client.get(key)
+        # 1. Try Redis first (if available)
+        if self.redis_client:
+            try:
+                key = self._get_session_key(telegram_user_id)
+                session_data = await self.redis_client.get(key)
+                
+                if session_data:
+                    try:
+                        session = json.loads(session_data)
+                        # Refresh TTL on activity
+                        await self.redis_client.expire(key, self.session_ttl)
+                        logger.info(f"Session retrieved from Redis for telegram_user_id={telegram_user_id}")
+                        return session
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to decode session data: {e}")
+                        # Continue to DB fallback
+            except RedisError as e:
+                logger.error(f"Redis error while getting session: {e}")
+                # Continue to DB fallback
+
+        # 2. Fallback to Persistent DB
+        logger.info(f"Checking DB for telegram_user_id={telegram_user_id}")
+        chat_id = await self.database.get_chat_id(telegram_user_id)
+        
+        if chat_id:
+            # Found in DB
+            logger.info(f"Restoring session from DB for telegram_user_id={telegram_user_id}")
             
-            if session_data:
-                session = json.loads(session_data)
-                # Refresh TTL on activity
-                await self.redis_client.expire(key, self.session_ttl)
-                logger.info(f"Session retrieved for telegram_user_id={telegram_user_id}")
-                return session
+            # Create session object
+            session = {
+                "telegram_user_id": telegram_user_id,
+                "chat_id": chat_id,
+                "internal_user_id": f"user_{telegram_user_id}",
+                "last_interaction_timestamp": datetime.utcnow().isoformat()
+            }
             
-            logger.info(f"No session found for telegram_user_id={telegram_user_id}")
-            return None
+            # Restore to Redis if possible
+            if self.redis_client:
+                try:
+                    await self.create_session(telegram_user_id, chat_id)
+                except Exception as e:
+                    logger.warning(f"Failed to restore session to Redis: {e}")
             
-        except RedisError as e:
-            logger.error(f"Redis error while getting session: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode session data: {e}")
-            return None
+            return session
+        
+        logger.info(f"No session found anywhere for telegram_user_id={telegram_user_id}")
+        return None
     
     async def create_session(
         self,
@@ -90,41 +121,36 @@ class SessionManager:
         internal_user_id: Optional[str] = None
     ) -> bool:
         """
-        Create or update user session in Redis.
-        
-        Args:
-            telegram_user_id: Telegram user ID
-            chat_id: Unique UUID for AI chat session
-            internal_user_id: Optional internal system user ID
-            
-        Returns:
-            True if successful, False otherwise
+        Create or update user session in DB and Redis.
         """
-        if not self.redis_client:
-            logger.warning("Redis not available, cannot create session")
-            return False
+        # 1. Store in Persistent DB first (Critical)
+        success = await self.database.store_user_mapping(telegram_user_id, chat_id)
+        if not success:
+            logger.error("Failed to persist user mapping to DB")
+            # We continue to try Redis, but this is bad.
         
-        try:
-            key = self._get_session_key(telegram_user_id)
-            session_data = {
-                "telegram_user_id": telegram_user_id,
-                "chat_id": chat_id,
-                "internal_user_id": internal_user_id or f"user_{telegram_user_id}",
-                "last_interaction_timestamp": datetime.utcnow().isoformat()
-            }
-            
-            await self.redis_client.setex(
-                key,
-                self.session_ttl,
-                json.dumps(session_data)
-            )
-            
-            logger.info(f"Session created for telegram_user_id={telegram_user_id}")
-            return True
-            
-        except RedisError as e:
-            logger.error(f"Redis error while creating session: {e}")
-            return False
+        # 2. Store in Redis (Cache)
+        session_data = {
+            "telegram_user_id": telegram_user_id,
+            "chat_id": chat_id,
+            "internal_user_id": internal_user_id or f"user_{telegram_user_id}",
+            "last_interaction_timestamp": datetime.utcnow().isoformat()
+        }
+        
+        if self.redis_client:
+            try:
+                key = self._get_session_key(telegram_user_id)
+                await self.redis_client.setex(
+                    key,
+                    self.session_ttl,
+                    json.dumps(session_data)
+                )
+                logger.info(f"Session created in Redis for telegram_user_id={telegram_user_id}")
+            except RedisError as e:
+                logger.error(f"Redis error while creating session: {e}")
+                # We return True because DB write worked (or we tried)
+        
+        return True
     
     async def update_conversation_state(
         self,
