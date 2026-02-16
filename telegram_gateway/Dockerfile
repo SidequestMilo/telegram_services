@@ -17,8 +17,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app ./app
 
-# Create non-root user
-RUN useradd -m -u 1000 telegram && chown -R telegram:telegram /app
+# Create non-root user and data directory
+RUN useradd -m -u 1000 telegram && \
+    mkdir -p /app/data && \
+    chown -R telegram:telegram /app
+
 USER telegram
 
 # Expose port
@@ -29,4 +32,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/health')"
 
 # Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     
     # Initialize components
-    database = Database()
+    database = Database(db_path=settings.DB_PATH)
     session_manager = SessionManager(settings, database)
     rate_limiter = RateLimiter(settings)
     api_client = InternalAPIClient(settings)

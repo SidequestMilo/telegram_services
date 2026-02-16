@@ -146,21 +146,44 @@ class InternalAPIClient:
         Returns:
             AI response payload
         """
+        # Logging/Telemetry for the chat request
+        logger.info(
+            f"Sending chat message to AI model {self.settings.AI_MODEL_ID}",
+            extra={
+                "request_id": request_id,
+                "chat_id": chat_id,
+                "telegram_user_id": telegram_user_id,
+                "model_id": self.settings.AI_MODEL_ID,
+                "temperature": self.settings.AI_TEMPERATURE
+            }
+        )
+        
         payload = {
             "chat_id": chat_id,
-            "user_id": str(telegram_user_id),
-            "message": message_text
+            "model_id": self.settings.AI_MODEL_ID,
+            "message": message_text,
+            "max_tokens": self.settings.AI_MAX_TOKENS,
+            "temperature": self.settings.AI_TEMPERATURE,
+            "timeout_seconds": self.settings.AI_TIMEOUT_SECONDS
         }
         
         # Use conversation_url as the AI service base URL
-        # e.g., http://localhost:8001/chat
-        return await self._make_request(
+        # e.g., http://3.110.172.55:8000/chat
+        result = await self._make_request(
             f"{self.conversation_url}/chat",
             payload,
             self.conversation_timeout,
             "AIService/Chat",
             request_id
         )
+        
+        if result and "response" in result:
+            return {
+                "type": "text",
+                "content": result["response"]
+            }
+            
+        return result
 
     async def call_ai_generate(
         self,

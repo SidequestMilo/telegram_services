@@ -19,6 +19,16 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
     REDIS_PASSWORD: Optional[str] = None
     
+    # Database Configuration
+    DB_PATH: str = "users.db"
+    
+    # AI Model Configuration
+    AI_MODEL_ID: str = "string"
+    AI_MAX_TOKENS: int = 0
+    AI_TEMPERATURE: float = 1.0
+    AI_TIMEOUT_SECONDS: int = 1
+
+    
     # Session Configuration
     SESSION_TTL: int = 86400  # 24 hours in seconds
     

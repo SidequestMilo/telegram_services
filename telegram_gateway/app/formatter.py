@@ -14,7 +14,7 @@ class TelegramResponseFormatter:
     def format_text_message(
         chat_id: int,
         content: str,
-        parse_mode: str = "Markdown"
+        parse_mode: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Format simple text message.
@@ -27,18 +27,20 @@ class TelegramResponseFormatter:
         Returns:
             Telegram sendMessage payload
         """
-        return {
+        payload = {
             "chat_id": chat_id,
-            "text": content,
-            "parse_mode": parse_mode
+            "text": content
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return payload
     
     @staticmethod
     def format_inline_keyboard(
         chat_id: int,
         content: str,
         buttons: List[List[Dict[str, str]]],
-        parse_mode: str = "Markdown"
+        parse_mode: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Format message with inline keyboard.
@@ -52,14 +54,16 @@ class TelegramResponseFormatter:
         Returns:
             Telegram sendMessage payload with inline keyboard
         """
-        return {
+        payload = {
             "chat_id": chat_id,
             "text": content,
-            "parse_mode": parse_mode,
             "reply_markup": {
                 "inline_keyboard": buttons
             }
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return payload
     
     @staticmethod
     def format_edit_message(
@@ -67,7 +71,7 @@ class TelegramResponseFormatter:
         message_id: int,
         content: str,
         buttons: Optional[List[List[Dict[str, str]]]] = None,
-        parse_mode: str = "Markdown"
+        parse_mode: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Format message edit (for callback queries).
@@ -85,9 +89,11 @@ class TelegramResponseFormatter:
         payload = {
             "chat_id": chat_id,
             "message_id": message_id,
-            "text": content,
-            "parse_mode": parse_mode
+            "text": content
         }
+        
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         
         if buttons:
             payload["reply_markup"] = {"inline_keyboard": buttons}
@@ -184,8 +190,7 @@ class TelegramResponseFormatter:
         """Format rate limit exceeded message."""
         return {
             "chat_id": chat_id,
-            "text": "You're sending messages too fast, please slow down 🙂",
-            "parse_mode": "Markdown"
+            "text": "You're sending messages too fast, please slow down 🙂"
         }
     
     @staticmethod
@@ -193,6 +198,5 @@ class TelegramResponseFormatter:
         """Format generic error message."""
         return {
             "chat_id": chat_id,
-            "text": "Something went wrong on our side. Please try again in a minute.",
-            "parse_mode": "Markdown"
+            "text": "Something went wrong on our side. Please try again in a minute."
         }
