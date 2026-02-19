@@ -105,12 +105,17 @@ class InternalAPIClient:
                     return None
                     
             except httpx.HTTPStatusError as e:
+                # Log response.text for HTTP errors (status_code >= 400)
+                error_message = f"{service_name} HTTP error: {e.response.status_code}"
+                if e.response.status_code >= 400:
+                    error_message += f" - {e.response.text}"
                 logger.error(
-                    f"{service_name} HTTP error: {e.response.status_code}",
+                    error_message,
                     extra={
                         "request_id": request_id,
                         "service": service_name,
-                        "status_code": e.response.status_code
+                        "status_code": e.response.status_code,
+                        "response_text": e.response.text # Also add to extra for structured logging
                     }
                 )
                 if attempt == 1:
@@ -201,22 +206,137 @@ class InternalAPIClient:
             AI generation response
         """
         payload = {
-            "prompt": prompt
+            "model_id": self.settings.AI_MODEL_ID,
+            "prompt": prompt,
+            "max_tokens": self.settings.AI_MAX_TOKENS,
+            "temperature": self.settings.AI_TEMPERATURE,
+            "timeout_seconds": self.settings.AI_TIMEOUT_SECONDS
         }
         
-        return await self._make_request(
+        result = await self._make_request(
             f"{self.conversation_url}/generate",
             payload,
             self.conversation_timeout,
             "AIService/Generate",
             request_id
         )
+
+        # Standardize return of text content if possible
+        if result and ("response" in result or "text" in result or "content" in result):
+             content = result.get("response") or result.get("text") or result.get("content")
+             return {
+                 "type": "text",
+                 "content": content
+             }
+        
+        return result
     
+    async def call_ai_clear(
+        self,
+        chat_id: str,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Request session reset (clear history).
+        Instead of calling external API (which may not exist), we signal the gateway to rotate the session ID.
+        
+        Args:
+            chat_id: Persistent session ID (UUID)
+            request_id: Request ID
+            
+        Returns:
+            System action response to trigger session rotation
+        """
+        return {
+            "type": "system_action",
+            "action": "reset_session",
+            "content": "🧹 **Chat History Cleared**.\n\nWe can start fresh now!"
+        }
+
+    async def call_ai_interpret(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        message_text: str,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Call AI Microservice /conversation/interpret endpoint.
+        
+        Args:
+            chat_id: Persistent session ID
+            telegram_user_id: User's telegram ID
+            message_text: Text to interpret
+            request_id: Request ID
+            
+        Returns:
+            Interpretation result
+        """
+        payload = {
+            "chat_id": chat_id,
+            "user_id": str(telegram_user_id),
+            "model_id": self.settings.AI_MODEL_ID,
+            "message": message_text,
+            "context": {"type": "connection_matching"},
+            "max_tokens": self.settings.AI_MAX_TOKENS,
+            "temperature": self.settings.AI_TEMPERATURE,
+            "timeout_seconds": self.settings.AI_TIMEOUT_SECONDS
+        }
+        
+        # Note: path is /conversation/interpret based on user requirement
+        result = await self._make_request(
+            f"{self.conversation_url}/conversation/interpret",
+            payload,
+            self.conversation_timeout,
+            "AIService/Interpret",
+            request_id
+        )
+        
+        if result:
+             logger.info(f"AI Interpretation result: {result}")
+             
+             # Extract intent data
+             intent = result.get("intent", "general")
+             entities = result.get("entities", {})
+             interests = entities.get("interests", [])
+             goals = entities.get("goals", [])
+             
+             # Construct prompt for generation
+             prompt = (
+                 f"The user wants to connect with others. "
+                 f"Their intent is '{intent}'. "
+                 f"Interests: {', '.join(interests) if interests else 'Not specified'}. "
+                 f"Goals: {', '.join(goals) if goals else 'Not specified'}. "
+                 f"Generate a friendly response confirming you can help them find a match. "
+                 f"Then, ask 2 very specific, short questions to help narrow down the best match for them based on their interests/goals. "
+                 f"Do not act as the user. Act as the friendly AI assistant."
+             )
+             
+             # Call generation
+             gen_result = await self.call_ai_generate(prompt, request_id)
+             if gen_result and "content" in gen_result:
+                 return {
+                     "type": "text",
+                     "content": gen_result["content"]
+                 }
+             
+             # Fallback if generation fails but interpret worked
+             return {
+                 "type": "text",
+                 "content": f"I understand. You are interested in {', '.join(goals + interests) if goals or interests else 'connecting'}. Could you tell me more about what you are looking for?"
+             }
+        
+        return {
+            "type": "text",
+            "content": "Failed to interpret message."
+        }
+        
     async def call_user_profile(
         self,
         telegram_user_id: int,
         command: str,
-        request_id: str
+        request_id: str,
+        chat_id: str = "unknown"
     ) -> Optional[Dict[str, Any]]:
         """
         Call user profile service.
@@ -230,8 +350,9 @@ class InternalAPIClient:
             return {
                 "type": "text",
                 "content": "👋 Welcome! I'm your AI matching assistant.\n\n"
-                          "I'll help you connect with like-minded people.\n\n"
-                          "Use /profile to view your profile or just start chatting!",
+                          "Use /profile to onboard or view your profile.\n"
+                          "Use /connect to find matches.\n"
+                          "Use /help to see all commands.",
                 "internal_user_id": f"user_{telegram_user_id}",
                 "new_user": True
             }
@@ -240,21 +361,53 @@ class InternalAPIClient:
                 "type": "text",
                 "content": "🤖 **Available Commands:**\n\n"
                           "/start - Welcome message\n"
-                          "/help - Show this help\n"
-                          "/profile - View your profile\n\n"
+                          "/profile - Create/View profile (Upload Resume PDF/Doc)\n"
+                          "/connect - Find new matches\n"
+                          "/matches - View your matches\n"
+                          "/clear - Clear conversation history\n"
+                          "/generate <prompt> - AI Generation\n\n"
                           "Just message me naturally to start a conversation!"
             }
         elif command == "/profile":
             return {
-                "type": "profile",
+                "type": "text",  # Profile logic: ask for resume or show existing
                 "content": "👤 **Your Profile**\n\n"
-                          f"Telegram ID: {telegram_user_id}\n"
-                          f"Internal ID: user_{telegram_user_id}\n"
-                          "Matches: 5\n"
-                          "Status: Active",
+                          "You can upload your **Resume (PDF/DOC)** here to quick onboard.\n"
+                          "Or simply reply with your details to fill your profile manually.\n\n"
+                          f"Status: Active\nID: {telegram_user_id}",
                 "internal_user_id": f"user_{telegram_user_id}"
             }
-        
+        elif command == "/matches":
+            return {
+                "type": "match_list",
+                "content": "❤️ **Your Matches**",
+                "items": [
+                    {"name": "Ankit", "reason": "Both interested in ML and AI"},
+                    {"name": "Priya", "reason": "Share passion for startups"},
+                    {"name": "Rahul", "reason": "Both love hiking"},
+                    {"name": "Sara", "reason": "Fellow Python developer"}
+                ]
+            }
+        elif command == "/connect":
+             return await self.call_ai_interpret(
+                chat_id,
+                message_text="I want to connect with someone",
+                request_id=request_id
+            )
+        elif command == "/clear":
+             return await self.call_ai_clear(
+                chat_id,
+                request_id
+            )
+        elif command.startswith("FILE:"):
+             # Handle file upload mock
+             filename = command.split(":", 1)[1]
+             return {
+                "type": "text",
+                "content": f"📄 **Resume Received**: `{filename}`\n\n"
+                           "I'm analyzing your profile... (Mock processed)\n"
+                           "Profile updated successfully!"
+            }
         return {
             "type": "text",
             "content": "Unknown command",

@@ -1,69 +1,84 @@
 """
-Persistent database for user mappings using SQLite.
+Persistent database for user mappings using MongoDB (Motor).
 """
-import aiosqlite
 import logging
-from typing import Optional
+from typing import Optional, List
+from motor.motor_asyncio import AsyncIOMotorClient
 
 logger = logging.getLogger(__name__)
 
 class Database:
-    """Manages persistent user data."""
+    """Manages persistent user data with MongoDB."""
     
-    def __init__(self, db_path: str = "users.db"):
-        self.db_path = db_path
-        self._conn: Optional[aiosqlite.Connection] = None
+    def __init__(self, mongo_uri: str, db_name: str = "telegram_gateway"):
+        self.mongo_uri = mongo_uri
+        self.db_name = db_name
+        self.client: Optional[AsyncIOMotorClient] = None
+        self.db = None
 
     async def connect(self):
-        """Establish database connection and ensure tables exist."""
+        """Establish database connection and ensure indexes."""
         try:
-            self._conn = await aiosqlite.connect(self.db_path)
-            # Create user_mappings table
-            await self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    telegram_user_id INTEGER PRIMARY KEY,
-                    chat_id TEXT UNIQUE NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """
+            self.client = AsyncIOMotorClient(self.mongo_uri)
+            self.db = self.client[self.db_name]
+            
+            # Create indexes
+            # Ensure unique telegram_user_id in users
+            await self.db.users.create_index("telegram_user_id", unique=True)
+            # Ensure unique chat_id in users
+            await self.db.users.create_index("chat_id", unique=True, sparse=True)
+            
+            # Ensure unique message tracking
+            await self.db.messages.create_index(
+                [("telegram_user_id", 1), ("message_id", 1)], 
+                unique=True
             )
-            await self._conn.commit()
-            logger.info("Database connection established and schema verified")
+            
+            # Verify connection
+            await self.client.admin.command('ping')
+            logger.info("MongoDB connection established and indexes verified")
         except Exception as e:
             logger.error(f"Database connection error: {e}")
             raise
 
     async def disconnect(self):
         """Close database connection."""
-        if self._conn:
-            await self._conn.close()
+        if self.client:
+            self.client.close()
             logger.info("Database connection closed")
 
     async def get_chat_id(self, telegram_user_id: int) -> Optional[str]:
-        """
-        Retrieve persistent chat_id for a telegram user.
-        
-        Args:
-            telegram_user_id: Telegram user ID
-            
-        Returns:
-            Persistent chat_id (UUID) or None
-        """
-        if not self._conn:
-            logger.error("Database not connected")
-            return None
-            
+        """Retrieve persistent chat_id."""
+        if self.db is None: return None
         try:
-            cursor = await self._conn.execute(
-                "SELECT chat_id FROM users WHERE telegram_user_id = ?",
-                (telegram_user_id,)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else None
+            doc = await self.db.users.find_one({"telegram_user_id": telegram_user_id})
+            return doc.get("chat_id") if doc else None
         except Exception as e:
             logger.error(f"Error retrieving chat_id: {e}")
             return None
+
+    async def get_user_state(self, telegram_user_id: int) -> Optional[str]:
+        """Retrieve user state."""
+        if self.db is None: return None
+        try:
+            doc = await self.db.users.find_one({"telegram_user_id": telegram_user_id})
+            return doc.get("state") if doc else None
+        except Exception as e:
+            logger.error(f"Error retrieving state: {e}")
+            return None
+
+    async def update_user_state(self, telegram_user_id: int, state: Optional[str]) -> bool:
+        """Update user state."""
+        if self.db is None: return False
+        try:
+            result = await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$set": {"state": state}}
+            )
+            return result.modified_count > 0 or result.matched_count > 0
+        except Exception as e:
+            logger.error(f"Error updating state: {e}")
+            return False
 
     async def store_user_mapping(self, telegram_user_id: int, chat_id: str) -> bool:
         """
@@ -76,18 +91,56 @@ class Database:
         Returns:
             True if successful
         """
-        if not self._conn:
+        if self.db is None:
             logger.error("Database not connected")
             return False
             
         try:
-            await self._conn.execute(
-                "INSERT OR REPLACE INTO users (telegram_user_id, chat_id) VALUES (?, ?)",
-                (telegram_user_id, chat_id)
+            # Upsert chat_id
+            await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$set": {"chat_id": chat_id, "telegram_user_id": telegram_user_id}},
+                upsert=True
             )
-            await self._conn.commit()
             logger.info(f"Persisted mapping for user {telegram_user_id} -> {chat_id}")
             return True
         except Exception as e:
             logger.error(f"Error storing user mapping: {e}")
+            return False
+
+    async def add_message(self, telegram_user_id: int, message_id: int) -> bool:
+        """Log a message ID for a user."""
+        if self.db is None:
+            return False
+        try:
+            await self.db.messages.update_one(
+                {"telegram_user_id": telegram_user_id, "message_id": message_id},
+                {"$set": {"telegram_user_id": telegram_user_id, "message_id": message_id}},
+                upsert=True
+            )
+            return True
+        except Exception:
+            return False
+
+    async def get_messages(self, telegram_user_id: int) -> List[int]:
+        """Get all message IDs for a user."""
+        if self.db is None:
+            return []
+        try:
+            cursor = self.db.messages.find({"telegram_user_id": telegram_user_id})
+            messages = []
+            async for doc in cursor:
+                messages.append(doc["message_id"])
+            return messages
+        except Exception:
+            return []
+
+    async def clear_messages(self, telegram_user_id: int) -> bool:
+        """Clear message history for a user from DB."""
+        if self.db is None:
+            return False
+        try:
+            await self.db.messages.delete_many({"telegram_user_id": telegram_user_id})
+            return True
+        except Exception:
             return False

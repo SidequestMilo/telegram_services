@@ -2,10 +2,13 @@
 Table-driven routing for Telegram updates.
 """
 import logging
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any, Optional, Callable, Awaitable, TYPE_CHECKING
 from enum import Enum
 
 from .api_client import InternalAPIClient
+
+if TYPE_CHECKING:
+    from .session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +23,9 @@ class RouteType(str, Enum):
 class TelegramRouter:
     """Table-driven router for Telegram updates."""
     
-    def __init__(self, api_client: InternalAPIClient):
+    def __init__(self, api_client: InternalAPIClient, session_manager: 'SessionManager'):
         self.api_client = api_client
+        self.session_manager = session_manager
         
         # Command routing table
         self.COMMAND_ROUTES: Dict[str, Callable] = {
@@ -29,6 +33,9 @@ class TelegramRouter:
             "/help": self._handle_help_command,
             "/profile": self._handle_profile_command,
             "/generate": self._handle_generate_command,
+            "/clear": self._handle_clear_command,
+            "/connect": self._handle_connect_command,
+            "/matches": self._handle_matches_command,
         }
         
         # Callback routing table
@@ -48,23 +55,23 @@ class TelegramRouter:
         telegram_user_id: int,
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """
-        Route Telegram update to appropriate handler.
-        
-        Args:
-            update: Parsed Telegram update
-            internal_user_id: Internal system user ID
-            telegram_user_id: Telegram user ID
-            request_id: Unique request ID
-            
-        Returns:
-            Response from internal service or None
-        """
+        # ... (same as before) ...
         try:
             # Detect update type and route accordingly
             if "message" in update:
+                message = update["message"]
+                
+                # Check for document upload (Resume)
+                if "document" in message:
+                    return await self._route_document(
+                        message,
+                        chat_id,
+                        telegram_user_id,
+                        request_id
+                    )
+                
                 return await self._route_message(
-                    update["message"],
+                    message,
                     chat_id,
                     telegram_user_id,
                     request_id
@@ -119,7 +126,7 @@ class TelegramRouter:
                     "content": f"Unknown command: {command}\n\nUse /help to see available commands."
                 }
         
-        # Regular text message -> Conversation Service
+        # Regular text message -> Check State or Conversation Service
         logger.info(
             "Routing to conversation service",
             extra={"request_id": request_id, "route": "conversation"}
@@ -130,6 +137,54 @@ class TelegramRouter:
             text,
             request_id
         )
+
+    # ... (other methods) ...
+
+    async def _handle_text_message(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        text: str,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle regular text messages."""
+        # Check strict state
+        state = await self.session_manager.get_persistent_state(telegram_user_id)
+        
+        if state == "AWAITING_CONNECT_RESPONSE":
+            await self.session_manager.set_persistent_state(telegram_user_id, None)  # Clear state
+            return await self.api_client.call_ai_interpret(
+                chat_id,
+                telegram_user_id,
+                text,
+                request_id
+            )
+            
+        return await self.api_client.call_ai_chat(
+            chat_id,
+            telegram_user_id,
+            text,
+            request_id
+        )
+
+    async def _handle_connect_command(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        text: str,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle /connect command."""
+        # Set persistent state
+        await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_RESPONSE")
+        
+        return {
+             "type": "text",
+             "content": "🤝 **Let's Connect!**\n\n"
+                        "Tell me a bit about what you are looking for?\n"
+                        "(e.g., 'Looking for a co-founder', 'Someone to hike with', 'Coding buddy')\n\n"
+                        "Reply to this message and I'll find the best people for you!"
+        }
     
     async def _route_callback_query(
         self,
@@ -179,7 +234,8 @@ class TelegramRouter:
         return await self.api_client.call_user_profile(
             telegram_user_id,
             "/start",
-            request_id
+            request_id,
+            chat_id=chat_id
         )
     
     async def _handle_help_command(
@@ -193,7 +249,8 @@ class TelegramRouter:
         return await self.api_client.call_user_profile(
             telegram_user_id,
             "/help",
-            request_id
+            request_id,
+            chat_id=chat_id
         )
     
     async def _handle_profile_command(
@@ -207,7 +264,8 @@ class TelegramRouter:
         return await self.api_client.call_user_profile(
             telegram_user_id,
             "/profile",
-            request_id
+            request_id,
+            chat_id=chat_id
         )
     
     async def _handle_generate_command(
@@ -231,23 +289,68 @@ class TelegramRouter:
             prompt,
             request_id
         )
-    
-    # Text Message Handler
-    
-    async def _handle_text_message(
+
+    async def _handle_clear_command(
         self,
         chat_id: str,
         telegram_user_id: int,
         text: str,
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Handle regular text messages."""
-        return await self.api_client.call_ai_chat(
-            chat_id,
+        """Handle /clear command."""
+        return await self.api_client.call_user_profile(
             telegram_user_id,
-            text,
-            request_id
+            "/clear",
+            request_id,
+            chat_id=chat_id
         )
+        
+
+    async def _handle_matches_command(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        text: str,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle /matches command."""
+        return await self.api_client.call_user_profile(
+            telegram_user_id,
+            "/matches",
+            request_id,
+            chat_id=chat_id
+        )
+    
+    async def _route_document(
+        self,
+        message: Dict[str, Any],
+        chat_id: str,
+        telegram_user_id: int,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Route document/file uploads."""
+        document = message.get("document", {})
+        file_name = document.get("file_name", "unknown_file")
+        mime_type = document.get("mime_type", "")
+        
+        logger.info(
+            f"Received document: {file_name} ({mime_type})",
+            extra={"request_id": request_id, "file": file_name}
+        )
+        
+        # In a real system, we'd download the file here using document["file_id"]
+        # For now, we mock the upload process by sending a special command to the profile service
+        
+        return await self.api_client.call_user_profile(
+            telegram_user_id,
+            f"FILE:{file_name}",
+            request_id,
+            chat_id=chat_id
+        )
+
+    # Text Message Handler
+    
+
     
     # Callback Query Handlers
     

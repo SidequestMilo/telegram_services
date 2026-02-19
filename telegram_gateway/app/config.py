@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     # Database Configuration
     DB_PATH: str = "users.db"
     
+    # MongoDB Configuration
+    MONGO_URI: str
+    MONGO_DB_NAME: str = "telegram_gateway"
+    
     # AI Model Configuration
     AI_MODEL_ID: str = "string"
     AI_MAX_TOKENS: int = 0

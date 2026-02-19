@@ -55,16 +55,17 @@ telegram_http_client: httpx.AsyncClient
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global session_manager, rate_limiter, api_client, router, formatter, telegram_http_client
+    global session_manager, database, rate_limiter, api_client, router, formatter, telegram_http_client
     
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     
     # Initialize components
-    database = Database(db_path=settings.DB_PATH)
+    database = Database(mongo_uri=settings.MONGO_URI, db_name=settings.MONGO_DB_NAME)
     session_manager = SessionManager(settings, database)
     rate_limiter = RateLimiter(settings)
     api_client = InternalAPIClient(settings)
-    router = TelegramRouter(api_client)
+
+    router = TelegramRouter(api_client, session_manager)
     formatter = TelegramResponseFormatter()
     
     # Connect to services
@@ -159,6 +160,10 @@ async def telegram_webhook(
         if not telegram_user_id or not chat_id:
             logger.error("Could not extract user info from update", extra={"request_id": request_id})
             return Response(status_code=200)
+            
+        # Store user message ID for history tracking
+        if message_id:
+            await database.add_message(telegram_user_id, message_id)
         
         logger.info(
             f"Processing update for telegram_user_id={telegram_user_id}",
@@ -175,10 +180,12 @@ async def telegram_webhook(
                 f"Rate limit exceeded for telegram_user_id={telegram_user_id}",
                 extra={"request_id": request_id, "telegram_user_id": telegram_user_id}
             )
-            await send_telegram_message(
+            sent_msg_id = await send_telegram_message(
                 formatter.format_rate_limit_message(chat_id),
                 request_id
             )
+            if sent_msg_id:
+                await database.add_message(telegram_user_id, sent_msg_id)
             return Response(status_code=200)
         
         # Get or create session
@@ -207,6 +214,8 @@ async def telegram_webhook(
 
         internal_user_id = session.get("internal_user_id", f"user_{telegram_user_id}") if session else f"user_{telegram_user_id}"
         
+        logger.info(f"[DEBUG_FLOW] calling route_update for {telegram_user_id}", extra={"request_id": request_id})
+        
         # Route update to appropriate handler
         response = await router.route_update(
             update,
@@ -215,23 +224,88 @@ async def telegram_webhook(
             request_id
         )
         
+        logger.info(f"[DEBUG_FLOW] route_update returned: {response}", extra={"request_id": request_id})
+        
+        # specific handling for system actions (like session reset)
+        if response and response.get("type") == "system_action":
+            sys_action = response.get("action")
+            logger.info(f"[DEBUG_FLOW] handling system action: {sys_action}", extra={"request_id": request_id})
+            
+            if sys_action == "reset_session":
+                try:
+                    logger.info("Starting session reset process...", extra={"request_id": request_id})
+                    
+                    # 1. Delete all previous messages
+                    try:
+                        logger.info(f"Deleting message history for user {telegram_user_id}", extra={"request_id": request_id})
+                        msg_ids = await database.get_messages(telegram_user_id)
+                        logger.info(f"Found {len(msg_ids)} messages to delete", extra={"request_id": request_id})
+                        
+                        for msg_id in msg_ids:
+                            try:
+                                await telegram_http_client.post(
+                                    "/deleteMessage",
+                                    json={"chat_id": chat_id, "message_id": msg_id},
+                                    timeout=5.0
+                                )
+                            except Exception as del_e:
+                                # Start logging these errors to debug
+                                logger.warning(f"Failed to delete message {msg_id}: {del_e}")
+                                pass
+                        
+                        # Clear from DB
+                        await database.clear_messages(telegram_user_id)
+                        logger.info("Message history cleared from DB", extra={"request_id": request_id})
+                        
+                    except Exception as db_e:
+                         logger.error(f"Error handling message history deletion: {db_e}", extra={"request_id": request_id})
+
+                    # 2. Rotate session ID to "clear" AI context
+                    new_chat_id = str(uuid4())
+                    logger.info(f"Creating new session with ID: {new_chat_id}", extra={"request_id": request_id})
+                    await session_manager.create_session(telegram_user_id, new_chat_id)
+                    
+                    logger.info(
+                        f"Session reset (history cleared) for user {telegram_user_id}. New chat_id: {new_chat_id}",
+                        extra={"request_id": request_id}
+                    )
+                    
+                    # Convert back to text response for display
+                    response["type"] = "text"
+                
+                except Exception as reset_e:
+                    logger.error(f"CRITICAL ERROR in reset_session: {reset_e}", exc_info=True, extra={"request_id": request_id})
+                    # Fallback so user still gets a response
+                    response["type"] = "text"
+                    response["content"] = "Chat history cleared (with some internal errors)."
+        
         if not response:
             logger.error("No response from router", extra={"request_id": request_id})
-            await send_telegram_message(
+            sent_msg_id = await send_telegram_message(
                 formatter.format_error_message(chat_id),
                 request_id
             )
+            if sent_msg_id:
+                await database.add_message(telegram_user_id, sent_msg_id)
             return Response(status_code=200)
         
+        # Determine if we should edit or send new
+        # We only edit if it was a callback query
+        is_callback = "callback_query" in update
+        target_message_id = message_id if is_callback else None
+
         # Format response for Telegram
         telegram_payload = formatter.format_response(
             response,
             chat_id,
-            message_id
+            target_message_id
         )
         
         # Send response to Telegram
-        await send_telegram_message(telegram_payload, request_id)
+        sent_msg_id = await send_telegram_message(telegram_payload, request_id)
+        # Store outgoing bot message ID
+        if sent_msg_id:
+            await database.add_message(telegram_user_id, sent_msg_id)
         
         logger.info(
             "Update processed successfully",
@@ -251,10 +325,14 @@ async def telegram_webhook(
         # Try to send error message if we have chat_id
         try:
             if 'chat_id' in locals():
-                await send_telegram_message(
+                sent_msg_id = await send_telegram_message(
                     formatter.format_error_message(chat_id),
                     request_id
                 )
+                if sent_msg_id:
+                    # We can't easily await database here if we are inside broad exception handler
+                    # but we can try
+                    pass
         except:
             pass
     
@@ -275,7 +353,7 @@ def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[i
             return (
                 message.get("from", {}).get("id"),
                 message.get("chat", {}).get("id"),
-                None
+                message.get("message_id")
             )
         elif "callback_query" in update:
             callback = update["callback_query"]
@@ -290,13 +368,16 @@ def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[i
     return None, None, None
 
 
-async def send_telegram_message(payload: Dict[str, Any], request_id: str):
+async def send_telegram_message(payload: Dict[str, Any], request_id: str) -> Optional[int]:
     """
     Send message to Telegram API with retry logic.
     
     Args:
         payload: Telegram API payload
         request_id: Request ID for logging
+        
+    Returns:
+        Message ID of the sent/edited message, or None if failed
     """
     # Determine endpoint based on payload
     if "message_id" in payload:
@@ -313,12 +394,22 @@ async def send_telegram_message(payload: Dict[str, Any], request_id: str):
             )
             
             response.raise_for_status()
+            result = response.json()
             
             logger.info(
                 f"Telegram message sent successfully via {endpoint}",
                 extra={"request_id": request_id, "attempt": attempt + 1}
             )
-            return
+            
+            # Extract message_id
+            if endpoint == "/sendMessage":
+                return result.get("result", {}).get("message_id")
+            elif endpoint == "/editMessageText":
+                 # For edit, return the original message_id or the new one if different
+                 # Usually result is the Message object
+                 return result.get("result", {}).get("message_id")
+            
+            return None
             
         except httpx.HTTPStatusError as e:
             logger.error(
@@ -335,6 +426,7 @@ async def send_telegram_message(payload: Dict[str, Any], request_id: str):
             )
             if attempt == 1:
                 raise
+    return None
 
 
 if __name__ == "__main__":

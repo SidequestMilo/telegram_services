@@ -211,3 +211,10 @@ class SessionManager:
         except RedisError as e:
             logger.error(f"Redis error while deleting session: {e}")
             return False
+    async def set_persistent_state(self, telegram_user_id: int, state: Optional[str]) -> bool:
+        """Set persistent user state in DB."""
+        return await self.database.update_user_state(telegram_user_id, state)
+
+    async def get_persistent_state(self, telegram_user_id: int) -> Optional[str]:
+        """Get persistent user state from DB."""
+        return await self.database.get_user_state(telegram_user_id)
