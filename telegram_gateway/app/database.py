@@ -72,11 +72,12 @@ class Database:
         """Update user state."""
         if self.db is None: return False
         try:
-            result = await self.db.users.update_one(
+            await self.db.users.update_one(
                 {"telegram_user_id": telegram_user_id},
-                {"$set": {"state": state}}
+                {"$set": {"state": state, "telegram_user_id": telegram_user_id}},
+                upsert=True
             )
-            return result.modified_count > 0 or result.matched_count > 0
+            return True
         except Exception as e:
             logger.error(f"Error updating state: {e}")
             return False
@@ -144,4 +145,32 @@ class Database:
             await self.db.messages.delete_many({"telegram_user_id": telegram_user_id})
             return True
         except Exception:
+            return False
+
+    async def store_api_request(
+        self,
+        service_name: str,
+        endpoint: str,
+        payload: dict,
+        latency_ms: float,
+        status_code: int,
+        request_id: str
+    ) -> bool:
+        """Store API request metrics."""
+        if self.db is None:
+            return False
+        try:
+            from datetime import datetime
+            await self.db.api_requests.insert_one({
+                "service_name": service_name,
+                "endpoint": endpoint,
+                "payload": payload,
+                "latency_ms": latency_ms,
+                "status_code": status_code,
+                "request_id": request_id,
+                "timestamp": datetime.utcnow()
+            })
+            return True
+        except Exception as e:
+            logger.error(f"Error storing API request: {e}")
             return False

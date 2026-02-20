@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
     database = Database(mongo_uri=settings.MONGO_URI, db_name=settings.MONGO_DB_NAME)
     session_manager = SessionManager(settings, database)
     rate_limiter = RateLimiter(settings)
-    api_client = InternalAPIClient(settings)
+    api_client = InternalAPIClient(settings, database)
 
     router = TelegramRouter(api_client, session_manager)
     formatter = TelegramResponseFormatter()

@@ -152,7 +152,8 @@ class TelegramRouter:
         state = await self.session_manager.get_persistent_state(telegram_user_id)
         
         if state == "AWAITING_CONNECT_RESPONSE":
-            await self.session_manager.set_persistent_state(telegram_user_id, None)  # Clear state
+            # Change state to wait for their answer
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_MATCHES")
             return await self.api_client.call_ai_interpret(
                 chat_id,
                 telegram_user_id,
@@ -160,6 +161,17 @@ class TelegramRouter:
                 request_id
             )
             
+        if state == "AWAITING_CONNECT_MATCHES":
+            # Clear state, flow complete, return matches automatically
+            await self.session_manager.set_persistent_state(telegram_user_id, None)
+            return await self.api_client.call_matching(
+                chat_id,
+                "CONNECT",
+                None,
+                request_id
+            )
+            
+        # Default behavior for normal chats
         return await self.api_client.call_ai_chat(
             chat_id,
             telegram_user_id,

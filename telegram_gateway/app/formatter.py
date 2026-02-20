@@ -137,20 +137,19 @@ class TelegramResponseFormatter:
                 for item in items[:5]:  # Limit to 5 matches
                     name = item.get("name", "Unknown")
                     reason = item.get("reason", "")
+                    rating = item.get("rating", 4.5)
                     
                     # Add match card text
-                    content += f"\n\n👤 **{name}**\n{reason}"
+                    content += f"\n\n👤 **{name}** (⭐ {rating}/5.0)\n{reason}"
                     
-                    # Add action buttons for each match
+                    # Add action buttons for each match side-by-side
                     buttons.append([
                         {
-                            "text": f"✅ Connect with {name}",
+                            "text": f"✅ Connect",
                             "callback_data": f"ACCEPT:{name}"
-                        }
-                    ])
-                    buttons.append([
+                        },
                         {
-                            "text": f"⏭ Skip {name}",
+                            "text": f"⏭ Skip",
                             "callback_data": f"SKIP:{name}"
                         }
                     ])
