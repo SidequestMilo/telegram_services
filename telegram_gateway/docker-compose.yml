@@ -20,6 +20,10 @@ services:
       - AI_TIMEOUT_SECONDS=${AI_TIMEOUT_SECONDS}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DB_PATH=/app/data/users.db
+      - RATE_LIMIT_REQUESTS=${RATE_LIMIT_REQUESTS:-20}
+      - RATE_LIMIT_WINDOW=${RATE_LIMIT_WINDOW:-60}
+      - MONGO_URI=${MONGO_URI}
+      - MONGO_DB_NAME=${MONGO_DB_NAME}
     volumes:
       - ./data:/app/data
     depends_on:

@@ -23,15 +23,16 @@ class Database:
             self.db = self.client[self.db_name]
             
             # Create indexes
-            # Ensure unique telegram_user_id in users
-            await self.db.users.create_index("telegram_user_id", unique=True)
+            # Ensure unique telegram_user_id in users (sparse=True ignores null/missing)
+            await self.db.users.create_index("telegram_user_id", unique=True, sparse=True)
             # Ensure unique chat_id in users
             await self.db.users.create_index("chat_id", unique=True, sparse=True)
             
-            # Ensure unique message tracking
+            # Ensure unique message tracking (sparse to tolerate missing fields)
             await self.db.messages.create_index(
                 [("telegram_user_id", 1), ("message_id", 1)], 
-                unique=True
+                unique=True,
+                sparse=True
             )
             
             # Verify connection
