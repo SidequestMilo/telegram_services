@@ -174,3 +174,23 @@ class Database:
         except Exception as e:
             logger.error(f"Error storing API request: {e}")
             return False
+
+    async def store_match_result(
+        self,
+        telegram_user_id: int,
+        match_data: dict
+    ) -> bool:
+        """Store match results in database."""
+        if self.db is None:
+            return False
+        try:
+            from datetime import datetime
+            await self.db.matches.insert_one({
+                "telegram_user_id": telegram_user_id,
+                "match_data": match_data,
+                "timestamp": datetime.utcnow()
+            })
+            return True
+        except Exception as e:
+            logger.error(f"Error storing match result: {e}")
+            return False

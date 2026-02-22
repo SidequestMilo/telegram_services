@@ -327,8 +327,14 @@ class InternalAPIClient:
         
         if result:
              logger.info(f"AI Interpretation result: {result}")
-             # Simply return the 'reply' field from the interpret endpoint
-             reply_text = result.get("reply", "I'm sorry, I couldn't understand that. Could you please rephrase?")
+             
+             reply_text = result.get("reply")
+             
+             # If the interpret endpoint lacks a direct reply (e.g. initial /connect)
+             if not reply_text:
+                 logger.info("No explicit 'reply' found from interpret endpoint, using default text")
+                 reply_text = "Got it! Your connection preferences have been updated. Use /matches to see your suggestions!"
+             
              return {
                  "type": "text",
                  "content": reply_text
@@ -424,49 +430,82 @@ class InternalAPIClient:
     async def call_matching(
         self,
         chat_id: str,
+        telegram_user_id: int,
         action: str,
         target_user_id: Optional[str],
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """
-        Call matching service.
-        
-        Returns:
-            Mock response with match results or action confirmation
+        Call matching service endpoint.
         """
-        logger.info(f"[MOCK] Calling matching service for action {action}")
+        logger.info(f"Calling matching service for action {action} and user {telegram_user_id}")
         
-        import json
+        # Default fallback candidate
+        candidate = {
+            "name": "Alex (Fallback)",
+            "reason": "We couldn't generate an exact specific match right now, but here's someone interested in connecting!",
+            "rating": 4.5
+        }
         
-        # Default candidate if the AI parsing fails
-        candidate = {"name": "Alex", "reason": "A highly relevant connection based on your interests!"}
+        no_matches_found = False
         
         try:
-            # We use call_ai_chat with the user's specific chat_id so the AI reads the chat history context
-            prompt = (
-                "System: Based strictly on the user's LAST FEW messages about what they are looking for, "
-                "generate ONE highly relevant and very specific fake user profile for them to connect with. "
-                "It is critical that the match directly addresses the user's most recent request. "
-                "Output EXACTLY valid JSON with three keys: 'name' (a fake first name), 'reason' (a 5 to 10 word ultra-specific reason why they match the user's exact query), and 'rating' (a float out of 5.0, e.g., 4.8). "
-                "Do NOT include any generic markdown or extra text. ONLY raw JSON like {\"name\": \"Alex\", \"reason\": \"Loves baking cakes too!\", \"rating\": 4.9}."
-            )
-            ai_res = await self.call_ai_chat(chat_id, 0, prompt, request_id)
+            payload = {
+                "user_id": str(telegram_user_id)
+            }
             
-            if ai_res and "content" in ai_res:
-                content = ai_res["content"]
-                # Clean up potential markdown formatting around JSON
-                cleaned = content.replace("```json", "").replace("```", "").strip()
-                start = cleaned.find("{")
-                end = cleaned.rfind("}") + 1
-                if start >= 0 and end > start:
-                    parsed = json.loads(cleaned[start:end])
-                    if "name" in parsed and "reason" in parsed:
-                        candidate = parsed
-                        if "rating" not in candidate:
-                            candidate["rating"] = 4.5
+            result = await self._make_request(
+                f"{self.conversation_url}/conversation/matching",
+                payload,
+                # use conversation timeout since matching can involve AI latency
+                self.conversation_timeout,
+                "MatchingService/Match",
+                request_id
+            )
+            
+            if result and result.get("status") == "success" and result.get("match"):
+                match_data = result["match"]
+                match_user = match_data.get("user_id", f"User_{target_user_id}" if target_user_id else "Unknown User")
+                data = match_data.get("data", {})
+                entities = data.get("entities", {})
+                
+                interests = entities.get("interests", [])
+                skills = entities.get("skills", [])
+                goals = entities.get("goals", [])
+                
+                reason_parts = []
+                if goals:
+                    reason_parts.append(f"Goals: {', '.join(goals)}")
+                if interests:
+                    reason_parts.append(f"Interests: {', '.join(interests)}")
+                if skills:
+                    reason_parts.append(f"Skills: {', '.join(skills)}")
+                    
+                reason_str = " | ".join(reason_parts) if reason_parts else "A great potential connection based on your request!"
+                
+                # Format name nicely if it starts with user_
+                display_name = match_user.replace("user_", "User ") if match_user.startswith("user_") else match_user
+                
+                candidate = {
+                    "name": display_name,
+                    "reason": reason_str,
+                    "rating": 5.0
+                }
+                
+                if self.database:
+                    await self.database.store_match_result(telegram_user_id, result["match"])
+            elif result and result.get("status") == "success" and not result.get("match"):
+                no_matches_found = True
+                
         except Exception as e:
-            logger.error(f"Error generating dynamic context match: {e}")
+            logger.error(f"Error calling matching API: {e}")
         
+        if no_matches_found:
+            return {
+                "type": "text",
+                "content": "No perfect matches found at the moment! Try broadening your profile or checking back later. 🔍"
+            }
+            
         if action == "CONNECT":
             return {
                 "type": "match_list",

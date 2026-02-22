@@ -152,8 +152,10 @@ class TelegramRouter:
         state = await self.session_manager.get_persistent_state(telegram_user_id)
         
         if state == "AWAITING_CONNECT_RESPONSE":
-            # Change state to wait for their answer
-            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_MATCHES")
+            # State completed, clear it
+            await self.session_manager.set_persistent_state(telegram_user_id, None)
+            
+            # Hit interpret to extract and store their preferences
             return await self.api_client.call_ai_interpret(
                 chat_id,
                 telegram_user_id,
@@ -162,14 +164,8 @@ class TelegramRouter:
             )
             
         if state == "AWAITING_CONNECT_MATCHES":
-            # Clear state, flow complete, return matches automatically
+            # Legacy cleanup just in case any user is stuck in it
             await self.session_manager.set_persistent_state(telegram_user_id, None)
-            return await self.api_client.call_matching(
-                chat_id,
-                "CONNECT",
-                None,
-                request_id
-            )
             
         # Default behavior for normal chats
         return await self.api_client.call_ai_chat(
@@ -187,16 +183,27 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle /connect command."""
-        # Set persistent state
-        await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_RESPONSE")
+        # Extract everything after the /connect command
+        query = text.lower().replace("/connect", "").strip()
         
-        return {
-             "type": "text",
-             "content": "🤝 **Let's Connect!**\n\n"
-                        "Tell me a bit about what you are looking for?\n"
-                        "(e.g., 'Looking for a co-founder', 'Someone to hike with', 'Coding buddy')\n\n"
-                        "Reply to this message and I'll find the best people for you!"
-        }
+        if query:
+            # They provided preferences right in the command so interpret it directly
+            return await self.api_client.call_ai_interpret(
+                chat_id,
+                telegram_user_id,
+                message_text=query,
+                request_id=request_id
+            )
+        else:
+            # Ask the user what they are looking for so they reply next
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_RESPONSE")
+            return {
+                 "type": "text",
+                 "content": "🤝 **Let's Connect!**\n\n"
+                            "Tell me a bit about what you are looking for?\n"
+                            "(e.g., 'Looking for a co-founder', 'Someone to hike with', 'Coding buddy')\n\n"
+                            "Reply to this message and I'll save your preferences so you can use /matches!"
+            }
     
     async def _route_callback_query(
         self,
@@ -326,11 +333,12 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle /matches command."""
-        return await self.api_client.call_user_profile(
+        return await self.api_client.call_matching(
+            chat_id,
             telegram_user_id,
-            "/matches",
-            request_id,
-            chat_id=chat_id
+            "CONNECT",
+            None,
+            request_id
         )
     
     async def _route_document(
@@ -376,6 +384,7 @@ class TelegramRouter:
         """Handle CONNECT callback."""
         return await self.api_client.call_matching(
             chat_id,
+            telegram_user_id,
             "CONNECT",
             None,
             request_id
@@ -391,6 +400,7 @@ class TelegramRouter:
         """Handle ACCEPT callback."""
         return await self.api_client.call_matching(
             chat_id,
+            telegram_user_id,
             "ACCEPT",
             param,
             request_id
@@ -406,6 +416,7 @@ class TelegramRouter:
         """Handle REJECT callback."""
         return await self.api_client.call_matching(
             chat_id,
+            telegram_user_id,
             "REJECT",
             param,
             request_id
@@ -421,6 +432,7 @@ class TelegramRouter:
         """Handle SKIP callback."""
         return await self.api_client.call_matching(
             chat_id,
+            telegram_user_id,
             "SKIP",
             param,
             request_id
