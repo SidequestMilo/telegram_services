@@ -328,6 +328,12 @@ class InternalAPIClient:
         if result:
              logger.info(f"AI Interpretation result: {result}")
              
+             # Store interpreted preferences in the database
+             if self.database:
+                 entities = result.get("entities")
+                 if entities:
+                     await self.database.update_user_preferences(telegram_user_id, entities)
+             
              reply_text = result.get("reply")
              
              # If the interpret endpoint lacks a direct reply (e.g. initial /connect)
@@ -404,6 +410,7 @@ class InternalAPIClient:
         elif command == "/connect":
              return await self.call_ai_interpret(
                 chat_id,
+                telegram_user_id,
                 message_text="I want to connect with someone",
                 request_id=request_id
             )
@@ -450,8 +457,15 @@ class InternalAPIClient:
         no_matches_found = False
         
         try:
+            # Load user preferences from db to include in matching request
+            preferences = {}
+            if self.database:
+                preferences = await self.database.get_user_preferences(telegram_user_id) or {}
+                
             payload = {
-                "user_id": str(telegram_user_id)
+                "user_id": str(telegram_user_id),
+                "data": {"entities": preferences} if preferences else {},
+                "top_k": 5
             }
             
             result = await self._make_request(
@@ -463,40 +477,71 @@ class InternalAPIClient:
                 request_id
             )
             
-            if result and result.get("status") == "success" and result.get("match"):
-                match_data = result["match"]
-                match_user = match_data.get("user_id", f"User_{target_user_id}" if target_user_id else "Unknown User")
-                data = match_data.get("data", {})
-                entities = data.get("entities", {})
-                
-                interests = entities.get("interests", [])
-                skills = entities.get("skills", [])
-                goals = entities.get("goals", [])
-                
-                reason_parts = []
-                if goals:
-                    reason_parts.append(f"Goals: {', '.join(goals)}")
-                if interests:
-                    reason_parts.append(f"Interests: {', '.join(interests)}")
-                if skills:
-                    reason_parts.append(f"Skills: {', '.join(skills)}")
+            candidates = []
+            
+            # Extract matches list flexibly
+            matches = None
+            if isinstance(result, list):
+                matches = result
+            elif isinstance(result, dict):
+                matches = result.get("matches") if "matches" in result else (result if not result.get("status") else None)
+            
+            if matches is not None:
+                if not matches:
+                    no_matches_found = True
+                else:
+                    for match_data in matches:
+                        match_user = match_data.get("user_id", f"User_{target_user_id}" if target_user_id else "Unknown User")
+                        data = match_data.get("data", {})
+                        
+                        # Some versions of the endpoint return entities directly in data, while others nest it
+                        entities = data.get("entities") or data
+                        
+                        interests = entities.get("interests", [])
+                        skills = entities.get("skills", [])
+                        goals = entities.get("goals", [])
+                        location = entities.get("location", "")
+                        role = entities.get("role", "")
+                        
+                        reason_parts = []
+                        if role:
+                            reason_parts.append(f"Role: {role.title()}")
+                        if goals:
+                            reason_parts.append(f"Goals: {', '.join(goals)}")
+                        if interests:
+                            reason_parts.append(f"Interests: {', '.join(interests)}")
+                        if skills:
+                            reason_parts.append(f"Skills: {', '.join(skills)}")
+                        if location:
+                            reason_parts.append(f"Location: {location}")
+                            
+                        reason_str = " | ".join(reason_parts) if reason_parts else "A great potential connection based on your request!"
+                        score = match_data.get("score", 0.0)
+                        
+                        # Prioritize explicitly returned name
+                        explicit_name = match_data.get("name")
+                        if explicit_name:
+                            display_name = explicit_name
+                        else:
+                            display_name = match_user.replace("user_", "User ") if match_user.startswith("user_") else match_user
+                        
+                        candidates.append({
+                            "user_id": match_user,
+                            "name": display_name,
+                            "reason": reason_str,
+                            "rating": round(score * 5.0, 1) if score else 5.0,
+                            "match_percentage": round(score * 100) if score else 100
+                        })
                     
-                reason_str = " | ".join(reason_parts) if reason_parts else "A great potential connection based on your request!"
-                
-                # Format name nicely if it starts with user_
-                display_name = match_user.replace("user_", "User ") if match_user.startswith("user_") else match_user
-                
-                candidate = {
-                    "name": display_name,
-                    "reason": reason_str,
-                    "rating": 5.0
-                }
-                
-                if self.database:
-                    await self.database.store_match_result(telegram_user_id, result["match"])
-            elif result and result.get("status") == "success" and not result.get("match"):
-                no_matches_found = True
-                
+                    if candidates:
+                        candidate = candidates[0]  # Update fallback just in case
+                        
+                    if self.database:
+                        await self.database.store_match_result(telegram_user_id, {"matches": matches})
+            elif isinstance(result, dict) and result.get("match"):
+                # Fallback to older format handling if necessary
+                pass # Not removing the old entirely just in case, but keeping it simple
+                    
         except Exception as e:
             logger.error(f"Error calling matching API: {e}")
         
@@ -506,24 +551,75 @@ class InternalAPIClient:
                 "content": "No perfect matches found at the moment! Try broadening your profile or checking back later. 🔍"
             }
             
+        items_to_return = candidates if candidates else [candidate]
+        
+        # Helper function to find the next match in the list
+        def get_next_match(current_target: Optional[str], items: list):
+            if not current_target or not items:
+                return items[0] if items else candidate
+                
+            # Try to find exactly where we currently are
+            current_idx = -1
+            for i, item in enumerate(items):
+                # match the display name format we applied (e.g. "User 456" instead of "user_456")
+                expected_name = current_target.replace("user_", "User ") if current_target.startswith("user_") else current_target
+                if item["name"].lower() == expected_name.lower():
+                    current_idx = i
+                    break
+                    
+            # Wrap around or safely get the next item
+            next_idx = (current_idx + 1) % len(items)
+            return items[next_idx]
+            
+        next_candidate = get_next_match(target_user_id, items_to_return)
+
         if action == "CONNECT":
             return {
                 "type": "match_list",
                 "content": "🔍 **Suggested Match for You:**",
-                "items": [candidate]
+                "items": [next_candidate]  # Only show the 1st
             }
         elif action == "SKIP":
             return {
                 "type": "match_list",
                 "content": f"Skipped {target_user_id}. How about this match? 👇",
-                "items": [candidate]
+                "items": [next_candidate]
             }
         elif action == "ACCEPT":
-            return {
-                "type": "match_list",
-                "content": f"✅ Connected with {target_user_id}!\n\nHere is your next match 👇",
-                "items": [candidate]
-            }
+            import re
+            m = re.search(r'\d+', target_user_id)
+            if m:
+                target_tg_id = int(m.group())
+
+                current_profile = await self.database.get_user_profile(telegram_user_id) if self.database else {}
+                current_name = current_profile.get("name", "A connection")
+
+                logger.info(f"🔗 [MATCH ACCEPTED] User {telegram_user_id} generated a native direct message portal to connect with {target_tg_id}.")
+
+                # Fetch target's name so we can nicely link to it
+                target_profile = await self.database.get_user_profile(target_tg_id) if self.database else {}
+                target_name = target_profile.get("name", target_user_id) if target_profile else target_user_id
+
+                # Native Telegram URL syntax for private chat
+                my_link = f"[Click here to message {current_name}](tg://user?id={telegram_user_id})"
+                their_link = f"[Click here to message {target_name}](tg://user?id={target_tg_id})"
+
+                await self.send_direct_message(
+                    target_tg_id,
+                    f"🎉 **New Connection!**\n\n{current_name} is interested in connecting with you!\n\n"
+                    f"You can now chat natively in a private Telegram DM:\n👉 {my_link}"
+                )
+
+                return {
+                    "type": "text",
+                    "content": f"✅ Connected with {target_name}!\n\n💬 **Private Chat Ready**\nYou can now start a direct Telegram chat with them here:\n👉 {their_link}"
+                }
+            else:
+                return {
+                    "type": "match_list",
+                    "content": f"✅ Connected with {target_user_id}!\n\nHere is your next match 👇",
+                    "items": [next_candidate]
+                }
         
         # Fallback for REJECT (if we use it)
         return {
@@ -540,9 +636,6 @@ class InternalAPIClient:
     ) -> Optional[Dict[str, Any]]:
         """
         Call notification service.
-        
-        Returns:
-            Mock response with notification status
         """
         logger.info(f"[MOCK] Calling notification service for type {notification_type}")
         
@@ -551,3 +644,16 @@ class InternalAPIClient:
             "content": "🔔 Notification sent successfully",
             "success": True
         }
+
+    async def send_direct_message(self, target_telegram_id: int, text: str) -> bool:
+        """Helper to send out-of-bounds explicit direct messages to Telegram users."""
+        import httpx
+        try:
+            url = f"https://api.telegram.org/bot{self.settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json={"chat_id": target_telegram_id, "text": text, "parse_mode": "Markdown"}, timeout=5.0)
+                resp.raise_for_status()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to send direct message to {target_telegram_id}: {e}")
+            return False

@@ -138,19 +138,25 @@ class TelegramResponseFormatter:
                     name = item.get("name", "Unknown")
                     reason = item.get("reason", "")
                     rating = item.get("rating", 4.5)
+                    match_percent = item.get("match_percentage")
                     
                     # Add match card text
-                    content += f"\n\n👤 **{name}** (⭐ {rating}/5.0)\n{reason}"
+                    if match_percent is not None:
+                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0 • {match_percent}% Match)\n{reason}"
+                    else:
+                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0)\n{reason}"
+                    
+                    user_id = item.get("user_id", name)
                     
                     # Add action buttons for each match side-by-side
                     buttons.append([
                         {
                             "text": f"✅ Connect",
-                            "callback_data": f"ACCEPT:{name}"
+                            "callback_data": f"ACCEPT:{user_id}"
                         },
                         {
                             "text": f"⏭ Skip",
-                            "callback_data": f"SKIP:{name}"
+                            "callback_data": f"SKIP:{user_id}"
                         }
                     ])
                 

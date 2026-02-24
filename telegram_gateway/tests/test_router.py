@@ -22,9 +22,16 @@ def api_client(settings):
 
 
 @pytest.fixture
-def router(api_client):
+def session_manager():
+    class MockSessionManager:
+        async def get_persistent_state(self, uid): return None
+        async def set_persistent_state(self, uid, state): pass
+    return MockSessionManager()
+
+@pytest.fixture
+def router(api_client, session_manager):
     """Create router for testing."""
-    return TelegramRouter(api_client)
+    return TelegramRouter(api_client, session_manager)
 
 
 class TestWebhookParsing:
@@ -96,8 +103,14 @@ class TestRouting:
         assert "Welcome" in response["content"]
     
     @pytest.mark.asyncio
-    async def test_text_routing(self, router):
+    async def test_text_routing(self, router, monkeypatch):
         """Test text message is routed to conversation service."""
+        
+        async def mock_call_ai_chat(*args, **kwargs):
+            return {"type": "text", "content": "Hello there"}
+            
+        monkeypatch.setattr(router.api_client, "call_ai_chat", mock_call_ai_chat)
+        
         update = {
             "message": {
                 "from": {"id": 12345},

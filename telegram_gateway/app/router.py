@@ -36,6 +36,7 @@ class TelegramRouter:
             "/clear": self._handle_clear_command,
             "/connect": self._handle_connect_command,
             "/matches": self._handle_matches_command,
+            "/end": self._handle_end_command,
         }
         
         # Callback routing table
@@ -151,6 +152,26 @@ class TelegramRouter:
         # Check strict state
         state = await self.session_manager.get_persistent_state(telegram_user_id)
         
+        if state and str(state).startswith("IN_CHAT:"):
+            target_tg_id = int(str(state).split(":")[1])
+            
+            # Identify current user's name
+            current_profile = await self.api_client.database.get_user_profile(telegram_user_id) if getattr(self.api_client, "database", None) else {}
+            current_name = current_profile.get("name", "Connection")
+            
+            # Proxy message to the other person dynamically
+            logger.info(f"🔒 [CHAT ROOM PROXY] Sending message from {telegram_user_id} ({current_name}) -> To user {target_tg_id}")
+            success = await self.api_client.send_direct_message(
+                target_tg_id, 
+                f"💬 **{current_name}:**\n{text}"
+            )
+            
+            if not success:
+               logger.warning(f"🔒 [CHAT ROOM ERROR] Failed to deliver from {telegram_user_id} to {target_tg_id}")
+               return {"type": "text", "content": "Failed to send message to the chat room. The other user may have blocked the bot."}
+               
+            return None # We handled the message successfully as a transparent proxy.
+            
         if state == "AWAITING_CONNECT_RESPONSE":
             # State completed, clear it
             await self.session_manager.set_persistent_state(telegram_user_id, None)
@@ -162,6 +183,24 @@ class TelegramRouter:
                 text,
                 request_id
             )
+            
+        if state == "AWAITING_PROFILE_NAME":
+            if getattr(self.api_client, "database", None):
+                await self.api_client.database.update_user_profile_field(telegram_user_id, "name", text)
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_OCCUPATION")
+            return {"type": "text", "content": f"Nice to meet you, {text}! What is your occupation?"}
+            
+        if state == "AWAITING_PROFILE_OCCUPATION":
+            if getattr(self.api_client, "database", None):
+                await self.api_client.database.update_user_profile_field(telegram_user_id, "occupation", text)
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_LOCATION")
+            return {"type": "text", "content": "Got it. Finally, where are you located?"}
+
+        if state == "AWAITING_PROFILE_LOCATION":
+            if getattr(self.api_client, "database", None):
+                await self.api_client.database.update_user_profile_field(telegram_user_id, "location", text)
+            await self.session_manager.set_persistent_state(telegram_user_id, None)
+            return {"type": "text", "content": "Profile complete! 🎉 Type /profile to view it, or /connect to pair with others!"}
             
         if state == "AWAITING_CONNECT_MATCHES":
             # Legacy cleanup just in case any user is stuck in it
@@ -280,12 +319,23 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle /profile command."""
-        return await self.api_client.call_user_profile(
-            telegram_user_id,
-            "/profile",
-            request_id,
-            chat_id=chat_id
-        )
+        query = text.lower().replace("/profile", "").strip()
+        
+        if getattr(self.api_client, "database", None):
+            profile = await self.api_client.database.get_user_profile(telegram_user_id)
+            if profile and query != "setup":
+                name = profile.get("name", "Unknown")
+                occupation = profile.get("occupation", "Unknown")
+                location = profile.get("location", "Unknown")
+                
+                content = f"👤 **Your Profile**\n\nID: {telegram_user_id}\nName: {name}\nOccupation: {occupation}\nLocation: {location}\n\n📝 Type `/profile setup` to update your details, or `/connect` to find new matches based on your profile!"
+                return {"type": "text", "content": content}
+
+        await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_NAME")
+        return {
+            "type": "text",
+            "content": "📝 **Let's set up your profile!**\n\nFirst, what is your name?"
+        }
     
     async def _handle_generate_command(
         self,
@@ -323,6 +373,41 @@ class TelegramRouter:
             request_id,
             chat_id=chat_id
         )
+
+    async def _handle_end_command(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        text: str,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle /end command to exit a chat room."""
+        state = await self.session_manager.get_persistent_state(telegram_user_id)
+        if state and str(state).startswith("IN_CHAT:"):
+            target_tg_id = int(str(state).split(":")[1])
+            logger.info(f"🚪 [CHAT ROOM CLOSED] User {telegram_user_id} explicitly left chat room with {target_tg_id}.")
+            
+            # Break locks
+            await self.session_manager.set_persistent_state(telegram_user_id, None)
+            
+            target_state = await self.session_manager.get_persistent_state(target_tg_id)
+            if target_state and str(target_state) == f"IN_CHAT:{telegram_user_id}":
+                await self.session_manager.set_persistent_state(target_tg_id, None)
+                # Notify them
+                await self.api_client.send_direct_message(
+                    target_tg_id,
+                    "🚪 The other user has left the chat room. You can now use normal bot commands."
+                )
+            
+            return {
+                "type": "text",
+                "content": "🚪 You have successfully left the private chat room."
+            }
+            
+        return {
+            "type": "text",
+            "content": "You are not currently in a private chat room."
+        }
         
 
     async def _handle_matches_command(

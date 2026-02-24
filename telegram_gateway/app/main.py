@@ -7,8 +7,9 @@ from contextlib import asynccontextmanager
 from typing import Dict, Any, Tuple, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends
+from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends, Body
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import httpx
 
 from .config import get_settings, Settings
@@ -123,6 +124,51 @@ async def root():
         "docs": "/docs",
         "health": "/health"
     }
+
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    occupation: Optional[str] = None
+    location: Optional[str] = None
+
+
+@app.get("/api/users/{telegram_user_id}/profile")
+async def get_profile(telegram_user_id: int):
+    """Fetch a user's profile from the database."""
+    if not database:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+        
+    profile = await database.get_user_profile(telegram_user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    return {"status": "success", "telegram_user_id": telegram_user_id, "profile": profile}
+
+
+@app.post("/api/users/{telegram_user_id}/profile")
+async def update_profile(telegram_user_id: int, profile_data: ProfileUpdate):
+    """Directly update a user's profile via API."""
+    if not database:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+        
+    updated = False
+    
+    if profile_data.name is not None:
+        await database.update_user_profile_field(telegram_user_id, "name", profile_data.name)
+        updated = True
+    if profile_data.occupation is not None:
+        await database.update_user_profile_field(telegram_user_id, "occupation", profile_data.occupation)
+        updated = True
+    if profile_data.location is not None:
+        await database.update_user_profile_field(telegram_user_id, "location", profile_data.location)
+        updated = True
+        
+    if not updated:
+        raise HTTPException(status_code=400, detail="No fields provided to update")
+        
+    # Return updated profile
+    profile = await database.get_user_profile(telegram_user_id)
+    return {"status": "success", "message": "Profile updated", "profile": profile}
 
 
 @app.post("/webhook/telegram")

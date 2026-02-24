@@ -82,6 +82,56 @@ class Database:
             logger.error(f"Error updating state: {e}")
             return False
 
+    async def get_user_preferences(self, telegram_user_id: int) -> Optional[dict]:
+        """Retrieve user connection preferences."""
+        if self.db is None: return None
+        try:
+            doc = await self.db.users.find_one({"telegram_user_id": telegram_user_id})
+            return doc.get("preferences") if doc else None
+        except Exception as e:
+            logger.error(f"Error retrieving preferences: {e}")
+            return None
+
+    async def update_user_preferences(self, telegram_user_id: int, preferences: dict) -> bool:
+        """Update user connection preferences."""
+        if self.db is None: return False
+        try:
+            # We merge the new preferences with the old ones if desired, or just overwrite.
+            # Here we just overwrite for simplicity.
+            await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$set": {"preferences": preferences, "telegram_user_id": telegram_user_id}},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating preferences: {e}")
+            return False
+
+    async def get_user_profile(self, telegram_user_id: int) -> Optional[dict]:
+        """Retrieve user profile data."""
+        if self.db is None: return None
+        try:
+            doc = await self.db.users.find_one({"telegram_user_id": telegram_user_id})
+            return doc.get("profile") if doc else None
+        except Exception as e:
+            logger.error(f"Error retrieving profile: {e}")
+            return None
+
+    async def update_user_profile_field(self, telegram_user_id: int, field: str, value: str) -> bool:
+        """Update a specific field in the user's profile."""
+        if self.db is None: return False
+        try:
+            await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$set": {f"profile.{field}": value, "telegram_user_id": telegram_user_id}},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating profile field {field}: {e}")
+            return False
+
     async def store_user_mapping(self, telegram_user_id: int, chat_id: str) -> bool:
         """
         Store permanent user mapping.

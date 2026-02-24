@@ -21,7 +21,7 @@ class TestTextFormatting:
         
         assert result["chat_id"] == 12345
         assert result["text"] == "Hello, world!"
-        assert result["parse_mode"] == "Markdown"
+        assert "parse_mode" not in result
     
     def test_format_text_with_html(self, formatter):
         """Test formatting text with HTML parse mode."""
