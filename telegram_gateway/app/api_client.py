@@ -25,6 +25,7 @@ class InternalAPIClient:
         self.user_profile_url = settings.USER_PROFILE_SERVICE_URL
         self.matching_url = settings.MATCHING_SERVICE_URL
         self.notification_url = settings.NOTIFICATION_SERVICE_URL
+        self.vector_url = f"{settings.CONVERSATION_SERVICE_URL}/conversation/vector"
         
         # Timeouts
         self.conversation_timeout = settings.CONVERSATION_TIMEOUT
@@ -333,6 +334,20 @@ class InternalAPIClient:
                  entities = result.get("entities")
                  if entities:
                      await self.database.update_user_preferences(telegram_user_id, entities)
+                     
+                     # Get current user profile for the name and UPSERT to vector DB
+                     user_profile = await self.database.get_user_profile(telegram_user_id)
+                     name = user_profile.get("name", f"User {telegram_user_id}")
+                     intent = result.get("intent", "find_match")
+                     
+                     await self.call_vector_upsert(
+                         chat_id=chat_id,
+                         telegram_user_id=telegram_user_id,
+                         entities=entities,
+                         intent=intent,
+                         name=name,
+                         request_id=request_id
+                     )
              
              reply_text = result.get("reply")
              
@@ -350,6 +365,35 @@ class InternalAPIClient:
             "type": "text",
             "content": "Failed to interpret message."
         }
+
+    async def call_vector_upsert(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        entities: Dict[str, Any],
+        intent: str,
+        name: str,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Call AI Microservice /conversation/vector endpoint to upsert user profile
+        for matching.
+        """
+        payload = {
+            "user_id": str(telegram_user_id),
+            "data": {
+                "name": name,
+                "intent": intent,
+                "entities": entities
+            }
+        }
+        return await self._make_request(
+            self.vector_url,
+            payload,
+            self.conversation_timeout,
+            "AIService/VectorUpsert",
+            request_id
+        )
         
     async def call_user_profile(
         self,
@@ -457,14 +501,8 @@ class InternalAPIClient:
         no_matches_found = False
         
         try:
-            # Load user preferences from db to include in matching request
-            preferences = {}
-            if self.database:
-                preferences = await self.database.get_user_preferences(telegram_user_id) or {}
-                
             payload = {
                 "user_id": str(telegram_user_id),
-                "data": {"entities": preferences} if preferences else {},
                 "top_k": 5
             }
             
