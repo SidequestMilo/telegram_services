@@ -650,8 +650,9 @@ class InternalAPIClient:
                 target_username = target_profile.get("username") if target_profile else None
 
                 # Telegram syntax for private chat
-                my_url = f"https://t.me/{current_username}" if current_username else f"tg://user?id={telegram_user_id}"
-                their_url = f"https://t.me/{target_username}" if target_username else f"tg://user?id={target_tg_id}"
+                # Using tg://openmessage instead of tg://user to prevent the API from stripping the tag for users with strict privacy!
+                my_url = f"https://t.me/{current_username}" if current_username else f"tg://openmessage?user_id={telegram_user_id}"
+                their_url = f"https://t.me/{target_username}" if target_username else f"tg://openmessage?user_id={target_tg_id}"
 
                 my_link = f'<a href="{my_url}">Click here to message {current_name}</a>'
                 their_link = f'<a href="{their_url}">Click here to message {target_name}</a>'
