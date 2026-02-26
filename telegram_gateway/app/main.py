@@ -79,6 +79,24 @@ async def lifespan(app: FastAPI):
         base_url=f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
     )
     
+    # Set up Telegram bot menu commands
+    try:
+        commands_payload = {
+            "commands": [
+                {"command": "profile", "description": "View and update your profile details"},
+                {"command": "connect", "description": "Find or request new matches"},
+                {"command": "matches", "description": "View your current match suggestions"},
+                {"command": "help", "description": "See all available bot commands"}
+            ]
+        }
+        response = await telegram_http_client.post("/setMyCommands", json=commands_payload, timeout=5.0)
+        if response.status_code == 200:
+            logger.info("Successfully updated Telegram bot menu commands")
+        else:
+            logger.warning(f"Failed to update Telegram bot menu: {response.text}")
+    except Exception as e:
+        logger.error(f"Error setting Telegram commands: {e}")
+    
     logger.info("All services initialized successfully")
     
     yield
