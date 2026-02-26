@@ -625,7 +625,16 @@ class InternalAPIClient:
             }
         elif action == "ACCEPT":
             import re
-            m = re.search(r'\d+', target_user_id)
+            
+            # Extract target user_id and optionally target_name if separated by |
+            parts = target_user_id.split("|", 1) if target_user_id else []
+            if not parts:
+                return {"type": "text", "content": "❌ Invalid match request."}
+                
+            raw_target_id = parts[0]
+            provided_target_name = parts[1] if len(parts) > 1 else raw_target_id
+            
+            m = re.search(r'\d+', raw_target_id)
             if m:
                 target_tg_id = int(m.group())
 
@@ -636,7 +645,7 @@ class InternalAPIClient:
 
                 # Fetch target's name so we can nicely link to it
                 target_profile = await self.database.get_user_profile(target_tg_id) if self.database else {}
-                target_name = target_profile.get("name", target_user_id) if target_profile else target_user_id
+                target_name = target_profile.get("name", provided_target_name) if target_profile else provided_target_name
 
                 # Native Telegram URL syntax for private chat
                 my_link = f"[Click here to message {current_name}](tg://user?id={telegram_user_id})"

@@ -149,10 +149,15 @@ class TelegramResponseFormatter:
                     user_id = item.get("user_id", name)
                     
                     # Add action buttons for each match side-by-side
+                    
+                    # Store name in the callback payload to avoid needing a DB lookup on accept
+                    # Callback data hard limit is 64 bytes total
+                    accept_payload = f"ACCEPT:{user_id}|{name}"[:64]
+                    
                     buttons.append([
                         {
                             "text": f"✅ Connect",
-                            "callback_data": f"ACCEPT:{user_id}"
+                            "callback_data": accept_payload
                         },
                         {
                             "text": f"⏭ Skip",
