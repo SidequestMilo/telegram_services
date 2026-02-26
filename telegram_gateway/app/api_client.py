@@ -653,20 +653,39 @@ class InternalAPIClient:
                 my_url = f"https://t.me/{current_username}" if current_username else f"tg://user?id={telegram_user_id}"
                 their_url = f"https://t.me/{target_username}" if target_username else f"tg://user?id={target_tg_id}"
 
+                target_message = f"🎉 <b>New Connection!</b>\n\n{current_name} is interested in connecting with you!\n\nYou can now chat natively in a private Telegram DM below:"
+                target_markup = None
+                
+                if current_username:
+                    target_markup = {"inline_keyboard": [[{"text": f"📩 Message {current_name}", "url": my_url}]]}
+                else:
+                    target_message += f'\n👉 <a href="{my_url}">Click here to message {current_name}</a>'
+
                 await self.send_direct_message(
                     target_tg_id,
-                    f"🎉 <b>New Connection!</b>\n\n{current_name} is interested in connecting with you!\n\n"
-                    f"You can now chat natively in a private Telegram DM below:",
+                    target_message,
                     parse_mode="HTML",
-                    reply_markup={"inline_keyboard": [[{"text": f"📩 Message {current_name}", "url": my_url}]]}
+                    reply_markup=target_markup
                 )
 
-                return {
+                current_message = f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:"
+                current_buttons = None
+                
+                if target_username:
+                    current_buttons = [[{"text": f"📩 Message {target_name}", "url": their_url}]]
+                else:
+                    current_message += f'\n👉 <a href="{their_url}">Click here to message {target_name}</a>'
+
+                response_dict = {
                     "type": "text",
-                    "content": f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:",
-                    "buttons": [[{"text": f"📩 Message {target_name}", "url": their_url}]],
+                    "content": current_message,
                     "parse_mode": "HTML"
                 }
+                
+                if current_buttons:
+                    response_dict["buttons"] = current_buttons
+                    
+                return response_dict
             else:
                 return {
                     "type": "match_list",
