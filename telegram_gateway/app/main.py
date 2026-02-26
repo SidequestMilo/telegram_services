@@ -462,6 +462,12 @@ async def send_telegram_message(payload: Dict[str, Any], request_id: str) -> Opt
                 f"Telegram API error (attempt {attempt + 1}): {e.response.status_code}",
                 extra={"request_id": request_id, "response": e.response.text}
             )
+            
+            # If the error is just that the message hasn't changed, ignore it gracefully
+            if e.response.status_code == 400 and "message is not modified" in e.response.text.lower():
+                logger.info("Ignoring 'message is not modified' error from Telegram API.")
+                return payload.get("message_id")
+                
             if attempt == 1:  # Last attempt
                 raise
                 
