@@ -650,12 +650,15 @@ class InternalAPIClient:
                 target_username = target_profile.get("username") if target_profile else None
 
                 # Telegram syntax for private chat
-                # Using tg://openmessage instead of tg://user to prevent the API from stripping the tag for users with strict privacy!
-                my_url = f"https://t.me/{current_username}" if current_username else f"tg://openmessage?user_id={telegram_user_id}"
-                their_url = f"https://t.me/{target_username}" if target_username else f"tg://openmessage?user_id={target_tg_id}"
+                my_url = f"https://t.me/{current_username}" if current_username else f"tg://user?id={telegram_user_id}"
+                their_url = f"https://t.me/{target_username}" if target_username else f"tg://user?id={target_tg_id}"
 
                 my_link = f'<a href="{my_url}">Click here to message {current_name}</a>'
                 their_link = f'<a href="{their_url}">Click here to message {target_name}</a>'
+                
+                fallback_note = ""
+                if not target_username:
+                    fallback_note = f"\n\n⚠️ <i>Note: If the link above is not clickable, it is because {target_name} hasn't interacted with this bot yet (or it's a mock ID). Telegram blocks direct links for unseen users without @usernames!</i>"
 
                 await self.send_direct_message(
                     target_tg_id,
@@ -666,7 +669,7 @@ class InternalAPIClient:
 
                 return {
                     "type": "text",
-                    "content": f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:\n👉 {their_link}",
+                    "content": f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:\n👉 {their_link}{fallback_note}",
                     "parse_mode": "HTML"
                 }
             else:
