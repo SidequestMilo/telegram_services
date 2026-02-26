@@ -668,6 +668,13 @@ class InternalAPIClient:
                     reply_markup=target_markup
                 )
 
+                # Send a backend push/system notification that a new match connection occurred
+                await self.call_notification(
+                    str(target_tg_id),
+                    "new_match",
+                    request_id
+                )
+
                 current_message = f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:"
                 current_buttons = None
                 
@@ -709,13 +716,18 @@ class InternalAPIClient:
         """
         Call notification service.
         """
-        logger.info(f"[MOCK] Calling notification service for type {notification_type}")
-        
-        return {
-            "type": "text",
-            "content": "🔔 Notification sent successfully",
-            "success": True
+        payload = {
+            "user_id": internal_user_id,
+            "notification_type": notification_type,
+            "request_id": request_id
         }
+        return await self._make_request(
+            self.notification_url,
+            payload,
+            self.notification_timeout,
+            "NotificationService/Notify",
+            request_id
+        )
 
     async def send_direct_message(self, target_telegram_id: int, text: str, parse_mode: str = "Markdown", reply_markup: Optional[Dict[str, Any]] = None) -> bool:
         """Helper to send out-of-bounds explicit direct messages to Telegram users."""
