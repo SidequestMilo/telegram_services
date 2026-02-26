@@ -121,13 +121,15 @@ class TelegramResponseFormatter:
         content = response.get("content", "No response")
         
         try:
+            parse_mode = response.get("parse_mode", "Markdown")
+            
             if response_type == "text":
                 if message_id:
-                    return self.format_edit_message(chat_id, message_id, content)
-                return self.format_text_message(chat_id, content)
+                    return self.format_edit_message(chat_id, message_id, content, parse_mode=parse_mode)
+                return self.format_text_message(chat_id, content, parse_mode=parse_mode)
             
             elif response_type == "profile":
-                return self.format_text_message(chat_id, content)
+                return self.format_text_message(chat_id, content, parse_mode=parse_mode)
             
             elif response_type == "match_list":
                 # Convert match list to inline keyboard
@@ -166,8 +168,8 @@ class TelegramResponseFormatter:
                     ])
                 
                 if message_id:
-                    return self.format_edit_message(chat_id, message_id, content, buttons)
-                return self.format_inline_keyboard(chat_id, content, buttons)
+                    return self.format_edit_message(chat_id, message_id, content, buttons, parse_mode=parse_mode)
+                return self.format_inline_keyboard(chat_id, content, buttons, parse_mode=parse_mode)
             
             elif response_type == "confirmation":
                 buttons = [
@@ -178,15 +180,15 @@ class TelegramResponseFormatter:
                 ]
                 
                 if message_id:
-                    return self.format_edit_message(chat_id, message_id, content, buttons)
-                return self.format_inline_keyboard(chat_id, content, buttons)
+                    return self.format_edit_message(chat_id, message_id, content, buttons, parse_mode=parse_mode)
+                return self.format_inline_keyboard(chat_id, content, buttons, parse_mode=parse_mode)
             
             else:
                 # Fallback to text
                 logger.warning(f"Unknown response type: {response_type}, falling back to text")
                 if message_id:
-                    return self.format_edit_message(chat_id, message_id, content)
-                return self.format_text_message(chat_id, content)
+                    return self.format_edit_message(chat_id, message_id, content, parse_mode=parse_mode)
+                return self.format_text_message(chat_id, content, parse_mode=parse_mode)
                 
         except Exception as e:
             logger.error(f"Error formatting response: {e}")
