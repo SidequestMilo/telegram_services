@@ -218,8 +218,8 @@ async def telegram_webhook(
             logger.error(f"Failed to parse update JSON: {e}", extra={"request_id": request_id})
             return Response(status_code=200)
         
-        # Extract telegram_user_id and chat_id
-        telegram_user_id, chat_id, message_id = extract_user_info(update)
+        # Extract telegram_user_id and chat_id and optionally username
+        telegram_user_id, chat_id, message_id, username = extract_user_info(update)
         
         if not telegram_user_id or not chat_id:
             logger.error("Could not extract user info from update", extra={"request_id": request_id})
@@ -228,6 +228,10 @@ async def telegram_webhook(
         # Store user message ID for history tracking
         if message_id:
             await database.add_message(telegram_user_id, message_id)
+            
+        # Opportunistically save the username if they have one so we can link them properly later
+        if username:
+            await database.update_user_profile_field(telegram_user_id, "username", username)
         
         logger.info(
             f"Processing update for telegram_user_id={telegram_user_id}",
@@ -404,12 +408,12 @@ async def telegram_webhook(
     return Response(status_code=200)
 
 
-def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[str]]:
     """
-    Extract telegram_user_id, chat_id, and message_id from update.
+    Extract telegram_user_id, chat_id, message_id, and username from update.
     
     Returns:
-        Tuple of (telegram_user_id, chat_id, message_id)
+        Tuple of (telegram_user_id, chat_id, message_id, username)
     """
     try:
         if "message" in update:
@@ -417,19 +421,21 @@ def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[i
             return (
                 message.get("from", {}).get("id"),
                 message.get("chat", {}).get("id"),
-                message.get("message_id")
+                message.get("message_id"),
+                message.get("from", {}).get("username")
             )
         elif "callback_query" in update:
             callback = update["callback_query"]
             return (
                 callback.get("from", {}).get("id"),
                 callback.get("message", {}).get("chat", {}).get("id"),
-                callback.get("message", {}).get("message_id")
+                callback.get("message", {}).get("message_id"),
+                callback.get("from", {}).get("username")
             )
     except Exception as e:
         logger.error(f"Error extracting user info: {e}")
     
-    return None, None, None
+    return None, None, None, None
 
 
 async def send_telegram_message(payload: Dict[str, Any], request_id: str) -> Optional[int]:

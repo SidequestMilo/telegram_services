@@ -640,16 +640,21 @@ class InternalAPIClient:
 
                 current_profile = await self.database.get_user_profile(telegram_user_id) if self.database else {}
                 current_name = current_profile.get("name", "A connection")
+                current_username = current_profile.get("username")
 
                 logger.info(f"🔗 [MATCH ACCEPTED] User {telegram_user_id} generated a native direct message portal to connect with {target_tg_id}.")
 
                 # Fetch target's name so we can nicely link to it
                 target_profile = await self.database.get_user_profile(target_tg_id) if self.database else {}
                 target_name = target_profile.get("name", provided_target_name) if target_profile else provided_target_name
+                target_username = target_profile.get("username") if target_profile else None
 
-                # Native Telegram URL syntax for private chat (HTML formatting)
-                my_link = f'<a href="tg://user?id={telegram_user_id}">Click here to message {current_name}</a>'
-                their_link = f'<a href="tg://user?id={target_tg_id}">Click here to message {target_name}</a>'
+                # Telegram syntax for private chat
+                my_url = f"https://t.me/{current_username}" if current_username else f"tg://user?id={telegram_user_id}"
+                their_url = f"https://t.me/{target_username}" if target_username else f"tg://user?id={target_tg_id}"
+
+                my_link = f'<a href="{my_url}">Click here to message {current_name}</a>'
+                their_link = f'<a href="{their_url}">Click here to message {target_name}</a>'
 
                 await self.send_direct_message(
                     target_tg_id,
