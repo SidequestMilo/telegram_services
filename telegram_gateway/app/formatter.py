@@ -124,8 +124,11 @@ class TelegramResponseFormatter:
             parse_mode = response.get("parse_mode", "Markdown")
             
             if response_type == "text":
+                buttons = response.get("buttons")
                 if message_id:
-                    return self.format_edit_message(chat_id, message_id, content, parse_mode=parse_mode)
+                    return self.format_edit_message(chat_id, message_id, content, buttons, parse_mode=parse_mode)
+                if buttons:
+                    return self.format_inline_keyboard(chat_id, content, buttons, parse_mode=parse_mode)
                 return self.format_text_message(chat_id, content, parse_mode=parse_mode)
             
             elif response_type == "profile":

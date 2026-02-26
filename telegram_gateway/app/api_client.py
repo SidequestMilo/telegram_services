@@ -653,19 +653,18 @@ class InternalAPIClient:
                 my_url = f"https://t.me/{current_username}" if current_username else f"tg://user?id={telegram_user_id}"
                 their_url = f"https://t.me/{target_username}" if target_username else f"tg://user?id={target_tg_id}"
 
-                my_link = f'<a href="{my_url}">Click here to message {current_name}</a>'
-                their_link = f'<a href="{their_url}">Click here to message {target_name}</a>'
-
                 await self.send_direct_message(
                     target_tg_id,
                     f"🎉 <b>New Connection!</b>\n\n{current_name} is interested in connecting with you!\n\n"
-                    f"You can now chat natively in a private Telegram DM:\n👉 {my_link}",
-                    parse_mode="HTML"
+                    f"You can now chat natively in a private Telegram DM below:",
+                    parse_mode="HTML",
+                    reply_markup={"inline_keyboard": [[{"text": f"📩 Message {current_name}", "url": my_url}]]}
                 )
 
                 return {
                     "type": "text",
-                    "content": f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:\n👉 {their_link}",
+                    "content": f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:",
+                    "buttons": [[{"text": f"📩 Message {target_name}", "url": their_url}]],
                     "parse_mode": "HTML"
                 }
             else:
@@ -699,13 +698,17 @@ class InternalAPIClient:
             "success": True
         }
 
-    async def send_direct_message(self, target_telegram_id: int, text: str, parse_mode: str = "Markdown") -> bool:
+    async def send_direct_message(self, target_telegram_id: int, text: str, parse_mode: str = "Markdown", reply_markup: Optional[Dict[str, Any]] = None) -> bool:
         """Helper to send out-of-bounds explicit direct messages to Telegram users."""
         import httpx
         try:
             url = f"https://api.telegram.org/bot{self.settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = {"chat_id": target_telegram_id, "text": text, "parse_mode": parse_mode}
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+                
             async with httpx.AsyncClient() as client:
-                resp = await client.post(url, json={"chat_id": target_telegram_id, "text": text, "parse_mode": parse_mode}, timeout=5.0)
+                resp = await client.post(url, json=payload, timeout=5.0)
                 resp.raise_for_status()
                 return True
         except Exception as e:
