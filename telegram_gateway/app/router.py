@@ -35,6 +35,7 @@ class TelegramRouter:
             "/generate": self._handle_generate_command,
             "/clear": self._handle_clear_command,
             "/connect": self._handle_connect_command,
+            "/new": self._handle_new_command,
             "/matches": self._handle_matches_command,
             "/end": self._handle_end_command,
         }
@@ -184,6 +185,19 @@ class TelegramRouter:
                 request_id
             )
             
+        if state == "AWAITING_NEW_RESPONSE":
+            # State completed, clear it
+            await self.session_manager.set_persistent_state(telegram_user_id, None)
+            
+            # Hit interpret to extract and merge their preferences
+            return await self.api_client.call_ai_interpret(
+                chat_id,
+                telegram_user_id,
+                text,
+                request_id,
+                merge_preferences=True
+            )
+            
         if state == "AWAITING_PROFILE_NAME":
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "name", text)
@@ -242,6 +256,37 @@ class TelegramRouter:
                             "Tell me a bit about what you are looking for?\n"
                             "(e.g., 'Looking for a co-founder', 'Someone to hike with', 'Coding buddy')\n\n"
                             "Reply to this message and I'll save your preferences so you can use /matches!"
+            }
+
+    async def _handle_new_command(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        text: str,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle /new command."""
+        # Extract everything after the /new command
+        query = text.lower().replace("/new", "").strip()
+        
+        if query:
+            # They provided preferences right in the command so interpret it directly
+            return await self.api_client.call_ai_interpret(
+                chat_id,
+                telegram_user_id,
+                message_text=query,
+                request_id=request_id,
+                merge_preferences=True
+            )
+        else:
+            # Ask the user what they are looking for so they reply next
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_NEW_RESPONSE")
+            return {
+                 "type": "text",
+                 "content": "➕ **Add new connection preferences!**\n\n"
+                            "What else are you looking for right now?\n"
+                            "(Your existing preferences will be kept intact.)\n\n"
+                            "Reply to this message with your new preferences!"
             }
     
     async def _route_callback_query(

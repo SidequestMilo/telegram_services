@@ -292,7 +292,8 @@ class InternalAPIClient:
         chat_id: str,
         telegram_user_id: int,
         message_text: str,
-        request_id: str
+        request_id: str,
+        merge_preferences: bool = False
     ) -> Optional[Dict[str, Any]]:
         """
         Call AI Microservice /conversation/interpret endpoint.
@@ -302,6 +303,7 @@ class InternalAPIClient:
             telegram_user_id: User's telegram ID
             message_text: Text to interpret
             request_id: Request ID
+            merge_preferences: Whether to merge new preferences with the existing ones
             
         Returns:
             Interpretation result
@@ -332,8 +334,33 @@ class InternalAPIClient:
              # Store interpreted preferences in the database
              if self.database:
                  entities = result.get("entities")
-                 if entities:
-                     await self.database.update_user_preferences(telegram_user_id, entities)
+                 if entities is not None:
+                     merged_entities = entities
+                     if merge_preferences:
+                         existing = await self.database.get_user_preferences(telegram_user_id) or {}
+                         merged_entities = dict(existing)
+                         for k, v in entities.items():
+                             if isinstance(v, list):
+                                 existing_list = existing.get(k, [])
+                                 if isinstance(existing_list, list):
+                                     merged_list = existing_list.copy()
+                                     for item in v:
+                                         if item not in merged_list:
+                                             merged_list.append(item)
+                                     merged_entities[k] = merged_list
+                                 else:
+                                     merged_entities[k] = v
+                             elif isinstance(v, str):
+                                 existing_str = existing.get(k, "")
+                                 if isinstance(existing_str, str) and existing_str:
+                                     if v.lower() not in existing_str.lower():
+                                         merged_entities[k] = f"{existing_str}, {v}"
+                                 else:
+                                     merged_entities[k] = v
+                             else:
+                                 merged_entities[k] = v
+
+                     await self.database.update_user_preferences(telegram_user_id, merged_entities)
                      
                      # Get current user profile for the name and UPSERT to vector DB
                      user_profile = await self.database.get_user_profile(telegram_user_id)
@@ -343,7 +370,7 @@ class InternalAPIClient:
                      await self.call_vector_upsert(
                          chat_id=chat_id,
                          telegram_user_id=telegram_user_id,
-                         entities=entities,
+                         entities=merged_entities,
                          intent=intent,
                          name=name,
                          request_id=request_id
@@ -598,10 +625,14 @@ class InternalAPIClient:
                 
             # Try to find exactly where we currently are
             current_idx = -1
+            current_target_clean = current_target.replace("user_", "")
+            
             for i, item in enumerate(items):
-                # match the display name format we applied (e.g. "User 456" instead of "user_456")
-                expected_name = current_target.replace("user_", "User ") if current_target.startswith("user_") else current_target
-                if item["name"].lower() == expected_name.lower():
+                # match the display name format or matching user_id
+                item_id_clean = str(item.get("user_id", "")).replace("user_", "")
+                item_name_clean = item.get("name", "")
+                
+                if item_id_clean.lower() == current_target_clean.lower() or item_name_clean.lower() == current_target.lower():
                     current_idx = i
                     break
                     
@@ -618,9 +649,12 @@ class InternalAPIClient:
                 "items": [next_candidate]  # Only show the 1st
             }
         elif action == "SKIP":
+            import random
+            emojis = ["👇", "👀", "✨", "🚀", "💡", "🌟", "🔥"]
+            emoji = random.choice(emojis)
             return {
                 "type": "match_list",
-                "content": f"Skipped {target_user_id}. How about this match? 👇",
+                "content": f"Skipped {target_user_id}. How about this match? {emoji}",
                 "items": [next_candidate]
             }
         elif action == "ACCEPT":

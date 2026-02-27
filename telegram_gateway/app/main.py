@@ -85,7 +85,9 @@ async def lifespan(app: FastAPI):
             "commands": [
                 {"command": "profile", "description": "View and update your profile details"},
                 {"command": "connect", "description": "Find or request new matches"},
+                {"command": "new", "description": "Add new connection preferences"},
                 {"command": "matches", "description": "View your current match suggestions"},
+                {"command": "clear", "description": "Clear your conversation history"},
                 {"command": "help", "description": "See all available bot commands"}
             ]
         }
@@ -368,6 +370,22 @@ async def telegram_webhook(
             chat_id,
             target_message_id
         )
+        
+        # If this was a callback query, answer it to stop the button loading state
+        if is_callback:
+            callback_query_id = update["callback_query"].get("id")
+            if callback_query_id:
+                try:
+                    await telegram_http_client.post(
+                        "/answerCallbackQuery",
+                        json={"callback_query_id": callback_query_id},
+                        timeout=5.0
+                    )
+                except Exception as cb_e:
+                    logger.warning(
+                        f"Failed to answer callback query: {cb_e}",
+                        extra={"request_id": request_id}
+                    )
         
         # Send response to Telegram
         sent_msg_id = await send_telegram_message(telegram_payload, request_id)
