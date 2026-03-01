@@ -403,7 +403,7 @@ class TelegramRouter:
                         else:
                             content += f"• **{key.title()}**: {val}\n"
                 
-                content += "\n📝 Type `/profile setup` to update your details, or `/new` to add more preferences!"
+                content += "\n📝 Type `/profile setup` to update your details, or `/new` to add more preferences!\n\nUse `/connect` command so that Milo understands your preferences"
                 return {"type": "text", "content": content}
 
         await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_NAME")
