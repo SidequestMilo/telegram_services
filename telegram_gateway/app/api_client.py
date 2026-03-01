@@ -694,7 +694,23 @@ class InternalAPIClient:
                 my_url = f"https://t.me/{current_username}" if current_username else f"tg://user?id={telegram_user_id}"
                 their_url = f"https://t.me/{target_username}" if target_username else f"tg://user?id={target_tg_id}"
 
-                target_message = f"🎉 <b>New Connection!</b>\n\n{current_name} is interested in connecting with you!\n\nYou can now chat natively in a private Telegram DM below:"
+                current_preferences = await self.database.get_user_preferences(telegram_user_id) if self.database else {}
+                preferences_text = ""
+                if current_preferences:
+                    pref_parts = []
+                    for key, val in current_preferences.items():
+                        if val:
+                            if isinstance(val, list):
+                                pref_parts.append(f"{key.title()}: {', '.join(str(v) for v in val)}")
+                            else:
+                                pref_parts.append(f"{key.title()}: {val}")
+                    if pref_parts:
+                        preferences_text = " | ".join(pref_parts)
+
+                if preferences_text:
+                    target_message = f"🎉 <b>New Connection!</b>\n\n{current_name} is interested in the ({preferences_text}) and wants to connect with you!\n\nYou can now chat natively in a private Telegram DM below:"
+                else:
+                    target_message = f"🎉 <b>New Connection!</b>\n\n{current_name} wants to connect with you!\n\nYou can now chat natively in a private Telegram DM below:"
                 target_markup = None
                 
                 if current_username:
