@@ -173,15 +173,35 @@ class TelegramRouter:
                
             return None # We handled the message successfully as a transparent proxy.
             
-        if state == "AWAITING_CONNECT_RESPONSE":
+        if state == "AWAITING_CONNECT_PERSON":
+            # State transition to second question, save first answer in state string
+            import base64
+            # Using base64 to safely store arbitrary text in the state string
+            encoded_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
+            await self.session_manager.set_persistent_state(telegram_user_id, f"AWAITING_CONNECT_EXPLORE:{encoded_text}")
+            return {
+                "type": "text",
+                "content": "would you like to explore something new together?"
+            }
+
+        if state and str(state).startswith("AWAITING_CONNECT_EXPLORE:"):
             # State completed, clear it
+            encoded_text = str(state).split(":", 1)[1]
+            import base64
+            try:
+                first_answer = base64.b64decode(encoded_text.encode('utf-8')).decode('utf-8')
+            except Exception:
+                first_answer = ""
+                
             await self.session_manager.set_persistent_state(telegram_user_id, None)
+            
+            combined_text = f"Kind of person looking for: {first_answer}\nWant to explore new things together?: {text}"
             
             # Hit interpret to extract and store their preferences
             return await self.api_client.call_ai_interpret(
                 chat_id,
                 telegram_user_id,
-                text,
+                combined_text,
                 request_id
             )
             
@@ -249,13 +269,10 @@ class TelegramRouter:
             )
         else:
             # Ask the user what they are looking for so they reply next
-            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_RESPONSE")
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_PERSON")
             return {
                  "type": "text",
-                 "content": "🤝 **Let's Connect!**\n\n"
-                            "Tell me a bit about what you are looking for?\n"
-                            "(e.g., 'Looking for a co-founder', 'Someone to hike with', 'Coding buddy')\n\n"
-                            "Reply to this message and I'll save your preferences so you can use /matches!"
+                 "content": "thats exciting, what kind of person are you looking for?"
             }
 
     async def _handle_new_command(
