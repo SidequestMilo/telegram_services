@@ -440,14 +440,15 @@ class InternalAPIClient:
         if command == "/start":
             return {
                 "type": "text",
-                "content": "👋 hi, i’m milo - i match you to whoever you want - is there someone you would like to meet?\n\n"
+                "content": "👋 Hi, i’m Milo - I match you to whoever you want - Is there someone you would like to meet?\n\n"
                           "Available Commands:\n"
                           "/profile - View and update your profile details\n"
                           "/connect - Find or request new matches\n"
                           "/new - Add new connection preferences\n"
                           "/matches - View your current match suggestions\n"
                           "/clear - Clear your conversation history\n"
-                          "/help - See all available bot commands",
+                          "/help - See all available bot commands\n\n"
+                          "Use /connect command so that the Milo gets to know your preferences",
                 "internal_user_id": f"user_{telegram_user_id}",
                 "new_user": True
             }
