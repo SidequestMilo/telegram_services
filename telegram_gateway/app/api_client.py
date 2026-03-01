@@ -711,7 +711,11 @@ class InternalAPIClient:
                     target_message = f"🎉 <b>New Connection!</b>\n\n{current_name} is interested in the ({preferences_text}) and wants to connect with you!\n\nYou can now chat natively in a private Telegram DM below:"
                 else:
                     target_message = f"🎉 <b>New Connection!</b>\n\n{current_name} wants to connect with you!\n\nYou can now chat natively in a private Telegram DM below:"
-                target_markup = {"inline_keyboard": [[{"text": f"📩 Message {current_name}", "url": my_url}]]}
+                target_markup = None
+                if current_username:
+                    target_markup = {"inline_keyboard": [[{"text": f"📩 Message {current_name}", "url": my_url}]]}
+                else:
+                    target_message += f'\n👉 <a href="{my_url}">Message {current_name}</a>\n_(If unclickable, they must set a Telegram Username)_'
 
                 await self.send_direct_message(
                     target_tg_id,
@@ -728,14 +732,21 @@ class InternalAPIClient:
                 )
 
                 current_message = f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:"
-                current_buttons = [[{"text": f"📩 Message {target_name}", "url": their_url}]]
+                current_buttons = None
+                
+                if target_username:
+                    current_buttons = [[{"text": f"📩 Message {target_name}", "url": their_url}]]
+                else:
+                    current_message += f'\n👉 <a href="{their_url}">Message {target_name}</a>\n_(If unclickable, they must set a Telegram Username)_'
 
                 response_dict = {
                     "type": "text",
                     "content": current_message,
-                    "parse_mode": "HTML",
-                    "buttons": current_buttons
+                    "parse_mode": "HTML"
                 }
+                
+                if current_buttons:
+                    response_dict["buttons"] = current_buttons
                     
                 return response_dict
             else:
