@@ -381,8 +381,10 @@ class InternalAPIClient:
              # If the interpret endpoint lacks a direct reply (e.g. initial /connect)
              if not reply_text:
                  logger.info("No explicit 'reply' found from interpret endpoint, using default text")
-                 reply_text = "Got it! Your connection preferences have been updated. Use /matches to see your suggestions!"
-             
+                 reply_text = "Got it! Your connection preferences have been updated.\n\nUse `/matches` command to get your match"
+             else:
+                 if "/matches" not in reply_text:
+                     reply_text += "\n\nUse `/matches` command to get your match"
              return {
                  "type": "text",
                  "content": reply_text
