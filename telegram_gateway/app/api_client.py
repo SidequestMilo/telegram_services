@@ -448,7 +448,7 @@ class InternalAPIClient:
                           "/matches - View your current match suggestions\n"
                           "/clear - Clear your conversation history\n"
                           "/help - See all available bot commands\n\n"
-                          "Use /connect command so that the Milo gets to know your preferences",
+                          "Use /profile command to set up your profile",
                 "internal_user_id": f"user_{telegram_user_id}",
                 "new_user": True
             }
