@@ -390,7 +390,20 @@ class TelegramRouter:
                 occupation = profile.get("occupation", "Unknown")
                 location = profile.get("location", "Unknown")
                 
-                content = f"👤 **Your Profile**\n\nID: {telegram_user_id}\nName: {name}\nOccupation: {occupation}\nLocation: {location}\n\n📝 Type `/profile setup` to update your details, or `/connect` to find new matches based on your profile!"
+                content = f"👤 **Your Profile**\n\nID: {telegram_user_id}\nName: {name}\nOccupation: {occupation}\nLocation: {location}"
+                
+                preferences = await self.api_client.database.get_user_preferences(telegram_user_id)
+                if preferences:
+                    content += "\n\n🎯 **Your Connection Preferences:**\n"
+                    for key, val in preferences.items():
+                        if not val:
+                            continue
+                        if isinstance(val, list):
+                            content += f"• **{key.title()}**: {', '.join(str(v) for v in val)}\n"
+                        else:
+                            content += f"• **{key.title()}**: {val}\n"
+                
+                content += "\n📝 Type `/profile setup` to update your details, or `/new` to add more preferences!"
                 return {"type": "text", "content": content}
 
         await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_NAME")
