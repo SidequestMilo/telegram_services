@@ -399,9 +399,11 @@ class TelegramRouter:
                         if not val:
                             continue
                         if isinstance(val, list):
-                            content += f"• **{key.title()}**: {', '.join(str(v) for v in val)}\n"
+                            content += f"**{key.title()}**:\n"
+                            for item in val:
+                                content += f"  • {item}\n"
                         else:
-                            content += f"• **{key.title()}**: {val}\n"
+                            content += f"**{key.title()}**: {val}\n"
                 
                 content += "\n📝 Type `/profile setup` to update your details, or `/new` to add more preferences!\n\nUse `/connect` command so that Milo understands your preferences"
                 return {"type": "text", "content": content}
