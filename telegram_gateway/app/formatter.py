@@ -145,11 +145,26 @@ class TelegramResponseFormatter:
                     rating = item.get("rating", 4.5)
                     match_percent = item.get("match_percentage")
                     
+                    # Shorten reason to be more concise
+                    shortened_reason_parts = []
+                    for part in reason.split(" | "):
+                        if ": " in part:
+                            category, items_str = part.split(": ", 1)
+                            items = [i.strip() for i in items_str.split(",")]
+                            if len(items) > 3:
+                                shortened_reason_parts.append(f"{category}: {', '.join(items[:3])}, etc...")
+                            else:
+                                shortened_reason_parts.append(part)
+                        else:
+                            shortened_reason_parts.append(part)
+                            
+                    short_reason = " | ".join(shortened_reason_parts)
+                    
                     # Add match card text
                     if match_percent is not None:
-                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0 • {match_percent}% Match)\n{reason}"
+                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0 • {match_percent}% Match)\n{short_reason}"
                     else:
-                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0)\n{reason}"
+                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0)\n{short_reason}"
                     
                     user_id = item.get("user_id", name)
                     
