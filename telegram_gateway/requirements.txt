@@ -7,6 +7,7 @@ httpx==0.25.1
 python-dotenv==1.0.0
 motor==3.3.2
 pymongo>=4.5,<4.7
+PyJWT==2.8.0
 
 # Development dependencies
 pytest==7.4.3
