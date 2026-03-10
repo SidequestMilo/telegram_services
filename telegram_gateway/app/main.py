@@ -8,6 +8,7 @@ from typing import Dict, Any, Tuple, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends, Body
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import httpx
@@ -118,6 +119,14 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(admin_router)
