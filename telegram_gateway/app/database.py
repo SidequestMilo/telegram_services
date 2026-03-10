@@ -244,3 +244,65 @@ class Database:
         except Exception as e:
             logger.error(f"Error storing match result: {e}")
             return False
+
+    async def get_personality_profile(self, telegram_user_id: int) -> Optional[dict]:
+        """Retrieve the user's full personality profile (preferences + profile combined)."""
+        if self.db is None:
+            return None
+        try:
+            doc = await self.db.users.find_one({"telegram_user_id": telegram_user_id})
+            if not doc:
+                return None
+            profile = doc.get("profile", {})
+            preferences = doc.get("preferences", {})
+            return {**profile, **preferences}
+        except Exception as e:
+            logger.error(f"Error retrieving personality profile: {e}")
+            return None
+
+    async def update_personality_field(self, telegram_user_id: int, field: str, value) -> bool:
+        """Update a single personality preference field."""
+        if self.db is None:
+            return False
+        try:
+            await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$set": {f"preferences.{field}": value, "telegram_user_id": telegram_user_id}},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating personality field {field}: {e}")
+            return False
+
+    async def append_personality_list_field(self, telegram_user_id: int, field: str, items: list) -> bool:
+        """Append items to a list-type personality field without duplicates."""
+        if self.db is None:
+            return False
+        try:
+            await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$addToSet": {f"preferences.{field}": {"$each": items}}},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error appending to personality field {field}: {e}")
+            return False
+
+    async def increment_message_count(self, telegram_user_id: int) -> int:
+        """Atomically increment and return the user's message counter."""
+        if self.db is None:
+            return 0
+        try:
+            from pymongo import ReturnDocument
+            result = await self.db.users.find_one_and_update(
+                {"telegram_user_id": telegram_user_id},
+                {"$inc": {"message_count": 1}},
+                upsert=True,
+                return_document=ReturnDocument.AFTER
+            )
+            return result.get("message_count", 1)
+        except Exception as e:
+            logger.error(f"Error incrementing message count: {e}")
+            return 0

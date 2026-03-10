@@ -135,24 +135,27 @@ class TelegramResponseFormatter:
                 return self.format_text_message(chat_id, content, parse_mode=parse_mode)
             
             elif response_type == "match_list":
-                # Convert match list to inline keyboard
                 items = response.get("items", [])
                 buttons = []
                 
-                for item in items[:5]:  # Limit to 5 matches
+                if not items:
+                    content += "\n\nno matches yet! keep chatting with me to build your profile, or use /connect to share what you're looking for."
+                    if message_id:
+                        return self.format_edit_message(chat_id, message_id, content, parse_mode=parse_mode)
+                    return self.format_text_message(chat_id, content, parse_mode=parse_mode)
+                
+                for item in items[:5]:
                     name = item.get("name", "Unknown")
                     reason = item.get("reason", "")
-                    rating = item.get("rating", 4.5)
                     match_percent = item.get("match_percentage")
                     
-                    # Shorten reason to be more concise
                     shortened_reason_parts = []
                     for part in reason.split(" | "):
                         if ": " in part:
                             category, items_str = part.split(": ", 1)
-                            items = [i.strip() for i in items_str.split(",")]
-                            if len(items) > 3:
-                                shortened_reason_parts.append(f"{category}: {', '.join(items[:3])}, etc...")
+                            reason_items = [i.strip() for i in items_str.split(",")]
+                            if len(reason_items) > 3:
+                                shortened_reason_parts.append(f"{category}: {', '.join(reason_items[:3])}...")
                             else:
                                 shortened_reason_parts.append(part)
                         else:
@@ -160,27 +163,22 @@ class TelegramResponseFormatter:
                             
                     short_reason = " | ".join(shortened_reason_parts)
                     
-                    # Add match card text
                     if match_percent is not None:
-                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0 • {match_percent}% Match)\n{short_reason}"
+                        content += f"\n\n**{name}** ({match_percent}% match)\n{short_reason}"
                     else:
-                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0)\n{short_reason}"
+                        content += f"\n\n**{name}**\n{short_reason}"
                     
                     user_id = item.get("user_id", name)
                     
-                    # Add action buttons for each match side-by-side
-                    
-                    # Store name in the callback payload to avoid needing a DB lookup on accept
-                    # Callback data hard limit is 64 bytes total
                     accept_payload = f"ACCEPT:{user_id}|{name}"[:64]
                     
                     buttons.append([
                         {
-                            "text": f"✅ Connect",
+                            "text": "connect",
                             "callback_data": accept_payload
                         },
                         {
-                            "text": f"⏭ Skip",
+                            "text": "skip",
                             "callback_data": f"SKIP:{user_id}"
                         }
                     ])

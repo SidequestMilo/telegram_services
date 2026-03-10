@@ -1,6 +1,7 @@
 """
 Table-driven routing for Telegram updates.
 """
+import asyncio
 import logging
 from typing import Dict, Any, Optional, Callable, Awaitable, TYPE_CHECKING
 from enum import Enum
@@ -174,18 +175,15 @@ class TelegramRouter:
             return None # We handled the message successfully as a transparent proxy.
             
         if state == "AWAITING_CONNECT_PERSON":
-            # State transition to second question, save first answer in state string
             import base64
-            # Using base64 to safely store arbitrary text in the state string
             encoded_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
-            await self.session_manager.set_persistent_state(telegram_user_id, f"AWAITING_CONNECT_EXPLORE:{encoded_text}")
+            await self.session_manager.set_persistent_state(telegram_user_id, f"AWAITING_CONNECT_DEALBREAKER:{encoded_text}")
             return {
                 "type": "text",
-                "content": "would you like to explore something new together?"
+                "content": "got it! and what are your absolute deal-breakers in a partner?"
             }
 
-        if state and str(state).startswith("AWAITING_CONNECT_EXPLORE:"):
-            # State completed, clear it
+        if state and str(state).startswith("AWAITING_CONNECT_DEALBREAKER:"):
             encoded_text = str(state).split(":", 1)[1]
             import base64
             try:
@@ -195,9 +193,8 @@ class TelegramRouter:
                 
             await self.session_manager.set_persistent_state(telegram_user_id, None)
             
-            combined_text = f"Kind of person looking for: {first_answer}\nWant to explore new things together?: {text}"
+            combined_text = f"What I'm looking for in a partner: {first_answer}\nMy deal-breakers: {text}"
             
-            # Hit interpret to extract and store their preferences
             return await self.api_client.call_ai_interpret(
                 chat_id,
                 telegram_user_id,
@@ -221,26 +218,37 @@ class TelegramRouter:
         if state == "AWAITING_PROFILE_NAME":
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "name", text)
-            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_OCCUPATION")
-            return {"type": "text", "content": f"Nice to meet you, {text}! What is your occupation?"}
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_AGE")
+            return {"type": "text", "content": f"nice to meet you, {text}! how old are you?"}
             
-        if state == "AWAITING_PROFILE_OCCUPATION":
+        if state == "AWAITING_PROFILE_AGE":
             if getattr(self.api_client, "database", None):
-                await self.api_client.database.update_user_profile_field(telegram_user_id, "occupation", text)
+                await self.api_client.database.update_user_profile_field(telegram_user_id, "age", text)
             await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_LOCATION")
-            return {"type": "text", "content": "Got it. Finally, where are you located?"}
+            return {"type": "text", "content": "cool. where are you located?"}
 
         if state == "AWAITING_PROFILE_LOCATION":
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "location", text)
             await self.session_manager.set_persistent_state(telegram_user_id, None)
-            return {"type": "text", "content": "Profile complete! 🎉 Type /profile to view it, or /connect to pair with others!"}
+            return {"type": "text", "content": "profile set up! now just start chatting with me so i can learn your vibe, or use /connect to tell me what you're looking for"}
             
         if state == "AWAITING_CONNECT_MATCHES":
             # Legacy cleanup just in case any user is stuck in it
             await self.session_manager.set_persistent_state(telegram_user_id, None)
             
-        # Default behavior for normal chats
+        # Every 3rd message, extract personality in the background
+        db = getattr(self.api_client, "database", None)
+        if db:
+            count = await db.increment_message_count(telegram_user_id)
+            if count % 3 == 0:
+                asyncio.create_task(
+                    self.api_client.call_ai_interpret(
+                        chat_id, telegram_user_id, text, request_id,
+                        merge_preferences=True
+                    )
+                )
+
         return await self.api_client.call_ai_chat(
             chat_id,
             telegram_user_id,
@@ -272,7 +280,7 @@ class TelegramRouter:
             await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_PERSON")
             return {
                  "type": "text",
-                 "content": "thats exciting, what kind of person are you looking for?"
+                 "content": "that's exciting! what kind of person are you looking for? (personality, interests, vibe - anything goes)"
             }
 
     async def _handle_new_command(
@@ -300,10 +308,7 @@ class TelegramRouter:
             await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_NEW_RESPONSE")
             return {
                  "type": "text",
-                 "content": "➕ **Add new connection preferences!**\n\n"
-                            "What else are you looking for right now?\n"
-                            "(Your existing preferences will be kept intact.)\n\n"
-                            "Reply to this message with your new preferences!"
+                 "content": "what else would you like to add? tell me more about yourself or what you're looking for - i'll add it to your profile!"
             }
     
     async def _route_callback_query(
@@ -387,31 +392,43 @@ class TelegramRouter:
             profile = await self.api_client.database.get_user_profile(telegram_user_id)
             if profile and query != "setup":
                 name = profile.get("name", "Unknown")
-                occupation = profile.get("occupation", "Unknown")
+                age = profile.get("age", "Unknown")
                 location = profile.get("location", "Unknown")
                 
-                content = f"👤 **Your Profile**\n\nID: {telegram_user_id}\nName: {name}\nOccupation: {occupation}\nLocation: {location}"
+                content = f"**your profile**\n\nName: {name}\nAge: {age}\nLocation: {location}"
                 
                 preferences = await self.api_client.database.get_user_preferences(telegram_user_id)
                 if preferences:
-                    content += "\n\n🎯 **Your Connection Preferences:**\n"
-                    for key, val in preferences.items():
+                    label_map = {
+                        "interests": "Interests",
+                        "values": "Values",
+                        "personality_traits": "Personality",
+                        "humor_style": "Humor",
+                        "communication_style": "Communication",
+                        "lifestyle": "Lifestyle",
+                        "love_language": "Love Language",
+                        "deal_breakers": "Deal Breakers",
+                        "looking_for": "Looking For",
+                    }
+                    content += "\n\n**your personality profile:**\n"
+                    for key, label in label_map.items():
+                        val = preferences.get(key)
                         if not val:
                             continue
                         if isinstance(val, list):
-                            display_val = val[:4]
-                            suffix = ", etc..." if len(val) > 4 else ""
-                            content += f"• **{key.title()}**: {', '.join(str(v) for v in display_val)}{suffix}\n"
+                            display_val = val[:5]
+                            suffix = "..." if len(val) > 5 else ""
+                            content += f"- **{label}**: {', '.join(str(v) for v in display_val)}{suffix}\n"
                         else:
-                            content += f"• **{key.title()}**: {val}\n"
+                            content += f"- **{label}**: {val}\n"
                 
-                content += "\n📝 Type `/profile setup` to update your details, or `/new` to add more preferences!\n\nUse `/connect` command so that Milo understands your preferences"
+                content += "\ntype `/profile setup` to redo setup, `/new` to add preferences, or `/connect` to find matches!"
                 return {"type": "text", "content": content}
 
         await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_NAME")
         return {
             "type": "text",
-            "content": "📝 **Let's set up your profile!**\n\nFirst, what is your name?"
+            "content": "let's set up your profile!\n\nfirst, what's your name?"
         }
     
     async def _handle_generate_command(
