@@ -9,7 +9,7 @@ class AdminService:
         self.tg_bot_token = tg_bot_token
 
     async def get_users(self, page: int, limit: int, user_type: str = None, location: str = None, search: str = None) -> Dict[str, Any]:
-        if not self.db: return {"users": [], "total": 0}
+        if self.db is None: return {"users": [], "total": 0}
         
         skip = (page - 1) * limit
         filter_query = {}
@@ -43,7 +43,7 @@ class AdminService:
         return {"users": users, "total": total}
 
     async def get_user_by_id(self, telegram_id: str) -> Dict[str, Any]:
-        if not self.db: return None
+        if self.db is None: return None
         try:
              tel_id = int(telegram_id)
         except ValueError:
@@ -66,7 +66,7 @@ class AdminService:
         }
 
     async def get_matches(self, page: int, limit: int, status: str = None, date_range: str = None) -> Dict[str, Any]:
-        if not self.db: return {"matches": [], "total": 0}
+        if self.db is None: return {"matches": [], "total": 0}
         
         skip = (page - 1) * limit
         filter_query = {}
@@ -88,7 +88,7 @@ class AdminService:
         return {"matches": matches, "total": total}
 
     async def get_match_analytics(self) -> Dict[str, Any]:
-        if not self.db:
+        if self.db is None:
             return {"total_matches": 0, "accepted": 0, "skipped": 0, "success_rate": 0.0}
             
         total_matches = await self.db.matches.count_documents({})
@@ -108,7 +108,7 @@ class AdminService:
         }
 
     async def get_connections(self) -> Dict[str, Any]:
-        if not self.db: return {"connections": []}
+        if self.db is None: return {"connections": []}
         cursor = self.db.connections.find().sort("created_at", -1)
         connections = []
         async for doc in cursor:
@@ -122,7 +122,7 @@ class AdminService:
         except ValueError:
              tel_id = telegram_id
              
-        if not self.db: return {"skills": [], "goals": [], "interests": []}
+        if self.db is None: return {"skills": [], "goals": [], "interests": []}
         
         doc = await self.db.user_preferences.find_one({"telegram_user_id": tel_id})
         if not doc:
@@ -140,7 +140,7 @@ class AdminService:
         }
 
     async def get_feedback(self) -> Dict[str, Any]:
-        if not self.db: return {"feedback": []}
+        if self.db is None: return {"feedback": []}
         cursor = self.db.feedback.find().sort("created_at", -1)
         feedback = []
         async for doc in cursor:
@@ -153,7 +153,7 @@ class AdminService:
         return {"feedback": feedback}
 
     async def get_activity_logs(self, user: str = None, command: str = None, date_range: str = None) -> Dict[str, Any]:
-        if not self.db: return {"logs": []}
+        if self.db is None: return {"logs": []}
         
         filter_query = {}
         if user:
@@ -189,7 +189,7 @@ class AdminService:
         return {"logs": logs}
 
     async def get_platform_analytics(self) -> Dict[str, Any]:
-        if not self.db:
+        if self.db is None:
             return {"total_users": 0, "active_users_24h": 0, "new_users_today": 0, "total_matches": 0, "connections": 0, "feedback_count": 0}
             
         total_users = await self.db.users.count_documents({})
@@ -219,7 +219,7 @@ class AdminService:
         }
 
     async def get_user_segments(self) -> Dict[str, Any]:
-        if not self.db: return {"students": 0, "startup_founders": 0, "developers": 0, "investors": 0}
+        if self.db is None: return {"students": 0, "startup_founders": 0, "developers": 0, "investors": 0}
         
         cursor = self.db.users.aggregate([
             {

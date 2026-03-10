@@ -174,7 +174,7 @@ class ProfileUpdate(BaseModel):
 @app.get("/api/users/{telegram_user_id}/profile")
 async def get_profile(telegram_user_id: int):
     """Fetch a user's profile from the database."""
-    if not database:
+    if database is None:
         raise HTTPException(status_code=503, detail="Database not initialized")
         
     profile = await database.get_user_profile(telegram_user_id)
@@ -187,7 +187,7 @@ async def get_profile(telegram_user_id: int):
 @app.post("/api/users/{telegram_user_id}/profile")
 async def update_profile(telegram_user_id: int, profile_data: ProfileUpdate):
     """Directly update a user's profile via API."""
-    if not database:
+    if database is None:
         raise HTTPException(status_code=503, detail="Database not initialized")
         
     updated = False
