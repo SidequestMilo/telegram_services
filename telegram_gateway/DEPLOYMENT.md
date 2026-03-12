@@ -14,7 +14,7 @@ This guide covers how to deploy the Telegram Gateway service. The recommended me
 
 ## 🛠 Option 1: Docker Compose (Recommended)
 
-This method automatically sets up the application, Redis, and persistent volumes.
+This method automatically sets up the application, Redis, MongoDB, and persistent volumes.
 
 ### 1. Clone the Repository
 SSH into your server and clone your code:
@@ -89,11 +89,10 @@ curl -F "url=https://your-domain.com/webhook/telegram" \
 
 ---
 
-## 💾 Persistent Storage
-The application uses SQLite to store user mappings (`users.db`).
-*   **Location**: Inside the container at `/app/data/users.db`.
-*   **Host Mapping**: Mapped to `./data` in your project folder.
-*   **Backup**: backup the `./data` folder on your host machine to prevent data loss.
+The application uses **MongoDB** to store user mappings, message logs, and session data.
+*   **Database**: Automatically managed by the `mongodb` container.
+*   **Persistence**: Data is saved to the `mongo_data` volume and host mapping `./data`.
+*   **Backup**: Backup the `./data` folder on your host machine to prevent data loss.
 
 ---
 
