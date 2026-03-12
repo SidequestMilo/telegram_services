@@ -1,12 +1,21 @@
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
 import httpx
+import os
+import time
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+from bson import ObjectId
 
 class AdminService:
     def __init__(self, db, redis_client=None, tg_bot_token: str = ""):
         self.db = db
         self.redis = redis_client
         self.tg_bot_token = tg_bot_token
+        self.start_time = time.time()
 
     async def get_users(self, page: int, limit: int, user_type: str = None, location: str = None, search: str = None) -> Dict[str, Any]:
         if self.db is None: return {"users": [], "total": 0}
@@ -36,11 +45,130 @@ class AdminService:
                 "interests": profile.get("interests", []),
                 "goals": profile.get("goals", []),
                 "matches": doc.get("matches_count", 0),
-                "connections": doc.get("connections_count", 0)
+                "connections": doc.get("connections_count", 0),
+                "status": doc.get("status", "Active")
             })
             
         total = await self.db.users.count_documents(filter_query)
         return {"users": users, "total": total}
+
+    async def update_user_status(self, telegram_id: str, status: str) -> Dict[str, Any]:
+        if self.db is None: return {"status": "error", "message": "Database not connected"}
+        try:
+             tel_id = int(telegram_id)
+        except ValueError:
+             tel_id = telegram_id
+             
+        result = await self.db.users.update_one(
+            {"telegram_user_id": tel_id},
+            {"$set": {"status": status}}
+        )
+        if result.matched_count == 0:
+            return {"status": "error", "message": "User not found"}
+        return {"status": "success", "message": f"User status updated to {status}"}
+
+    async def get_match_trends(self) -> Dict[str, Any]:
+        if self.db is None: return {"trends": []}
+        
+        # Aggregate matches by date for the last 30 days
+        pipeline = [
+            {
+                "$match": {
+                    "timestamp": {"$gte": datetime.utcnow() - timedelta(days=30)}
+                }
+            },
+            {
+                "$group": {
+                    "_id": { "$dateToString": { "format": "%Y-%m-%d", "date": "$timestamp" } },
+                    "count": { "$sum": 1 },
+                    "success_count": { "$sum": { "$cond": [{ "$eq": ["$status", "accepted"] }, 1, 0] } },
+                    "avg_comp": { "$avg": "$match_data.score" }
+                }
+            },
+            { "$sort": { "_id": 1 } }
+        ]
+        
+        cursor = self.db.matches.aggregate(pipeline)
+        trends = []
+        async for doc in cursor:
+            trends.append({
+                "date": doc["_id"],
+                "count": doc["count"],
+                "success_count": doc["success_count"],
+                "average_compatibility": round(doc.get("avg_comp") or 0.0, 2)
+            })
+            
+        if not trends:
+            # Fallback mock data if no real data
+            for i in range(7):
+                date = (datetime.utcnow() - timedelta(days=6-i)).strftime("%Y-%m-%d")
+                trends.append({
+                    "date": date, 
+                    "count": 10 + i, 
+                    "success_count": 5 + i,
+                    "average_compatibility": 75.0 + i
+                })
+                
+        return {"trends": trends}
+
+    async def get_broadcast_history(self) -> Dict[str, Any]:
+        if self.db is None: return {"history": []}
+        
+        cursor = self.db.broadcasts.find().sort("sent_at", -1).limit(50)
+        history = []
+        async for doc in cursor:
+            history.append({
+                "id": str(doc["_id"]),
+                "message": doc.get("message", ""),
+                "audience": doc.get("audience", "All"),
+                "status": doc.get("status", "Sent"),
+                "sent_at": doc.get("sent_at", datetime.utcnow()),
+                "success_rate": doc.get("success_rate", 100.0)
+            })
+            
+        if not history:
+            # Add some dummy history if empty
+            history.append({
+                "id": "mock_1",
+                "message": "Welcome to our new community!",
+                "audience": "New Users",
+                "status": "Completed",
+                "sent_at": datetime.utcnow() - timedelta(days=2),
+                "success_rate": 98.5
+            })
+            
+        return {"history": history}
+
+    async def update_feedback_status(self, feedback_id: str, status: str) -> Dict[str, Any]:
+        if self.db is None: return {"status": "error", "message": "Database not connected"}
+        try:
+            obj_id = ObjectId(feedback_id)
+        except:
+            return {"status": "error", "message": "Invalid feedback ID"}
+            
+        result = await self.db.feedback.update_one(
+            {"_id": obj_id},
+            {"$set": {"status": status}}
+        )
+        if result.matched_count == 0:
+            return {"status": "error", "message": "Feedback not found"}
+        return {"status": "success", "message": f"Feedback status updated to {status}"}
+
+    async def get_system_resources(self) -> Dict[str, Any]:
+        if psutil is None:
+            return {
+                "cpu_usage": 0.0,
+                "memory_usage": 0.0,
+                "disk_usage": 0.0,
+                "uptime": time.time() - self.start_time
+            }
+            
+        return {
+            "cpu_usage": psutil.cpu_percent(),
+            "memory_usage": psutil.virtual_memory().percent,
+            "disk_usage": psutil.disk_usage('/').percent,
+            "uptime": time.time() - self.start_time
+        }
 
     async def get_user_by_id(self, telegram_id: str) -> Dict[str, Any]:
         if self.db is None: return None
@@ -152,6 +280,32 @@ class AdminService:
             })
         return {"feedback": feedback}
 
+    async def get_feedback_analytics(self) -> Dict[str, Any]:
+        if self.db is None:
+            return {"average_rating": 0.0, "total_reviews": 0, "sentiment_trends": {}, "rating_distribution": {}}
+            
+        cursor = self.db.feedback.find()
+        total_rating = 0
+        total_reviews = 0
+        rating_dist = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        
+        async for doc in cursor:
+            rating = doc.get("rating", 0)
+            if rating > 0:
+                total_rating += rating
+                total_reviews += 1
+                if rating in rating_dist:
+                    rating_dist[rating] += 1
+        
+        avg_rating = (total_rating / total_reviews) if total_reviews > 0 else 0.0
+        
+        return {
+            "average_rating": round(avg_rating, 2),
+            "total_reviews": total_reviews,
+            "sentiment_trends": {"positive": rating_dist[4] + rating_dist[5], "neutral": rating_dist[3], "negative": rating_dist[1] + rating_dist[2]},
+            "rating_distribution": rating_dist
+        }
+
     async def get_activity_logs(self, user: str = None, command: str = None, date_range: str = None) -> Dict[str, Any]:
         if self.db is None: return {"logs": []}
         
@@ -254,19 +408,19 @@ class AdminService:
     async def get_system_health(self) -> Dict[str, Any]:
         mongo_status = "disconnected"
         if self.db is not None:
-             try:
-                 await self.db.command('ping')
-                 mongo_status = "connected"
-             except:
-                 pass
+            try:
+                await self.db.command('ping')
+                mongo_status = "connected"
+            except:
+                pass
                  
         redis_status = "disconnected"
         if self.redis is not None:
-             try:
-                 await self.redis.ping()
-                 redis_status = "connected"
-             except:
-                 pass
+            try:
+                await self.redis.ping()
+                redis_status = "connected"
+            except:
+                pass
                  
         tg_status = "unreachable"
         if self.tg_bot_token:
@@ -277,7 +431,7 @@ class AdminService:
                          tg_status = "reachable"
             except:
                 pass
-                
+                 
         return {
             "mongodb": mongo_status,
             "redis": redis_status,

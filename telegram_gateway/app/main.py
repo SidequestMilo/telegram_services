@@ -20,7 +20,7 @@ from .rate_limiter import RateLimiter
 from .api_client import InternalAPIClient
 from .router import TelegramRouter
 from .formatter import TelegramResponseFormatter
-from .admin_api.router import router as admin_router
+from .admin_api.router import router as admin_router, broadcast_router
 
 # Configure logging
 def setup_logging(settings: Settings):
@@ -137,6 +137,7 @@ app.add_middleware(
 )
 
 app.include_router(admin_router)
+app.include_router(broadcast_router)
 
 
 def get_request_id() -> str:

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 from datetime import datetime
 
 class UserProfile(BaseModel):
@@ -38,6 +38,12 @@ class UserPreferencesResponse(BaseModel):
 class FeedbackResponse(BaseModel):
     feedback: List[dict]
 
+class FeedbackAnalyticsResponse(BaseModel):
+    average_rating: float
+    total_reviews: int
+    sentiment_trends: Dict[str, int]
+    rating_distribution: Dict[int, int]
+
 class ActivityLogResponse(BaseModel):
     logs: List[dict]
 
@@ -59,3 +65,33 @@ class SystemHealthResponse(BaseModel):
     mongodb: str
     redis: str
     telegram_api: str
+
+class SystemResourcesResponse(BaseModel):
+    cpu_usage: float
+    memory_usage: float
+    disk_usage: float
+    uptime: float
+
+class BroadcastHistoryItem(BaseModel):
+    id: str
+    message: str
+    audience: str
+    status: str
+    sent_at: datetime
+    success_rate: float
+
+class BroadcastHistoryResponse(BaseModel):
+    history: List[BroadcastHistoryItem]
+
+class MatchTrendItem(BaseModel):
+    date: str
+    count: int
+    success_count: int
+    average_compatibility: float
+
+class MatchTrendsResponse(BaseModel):
+    trends: List[MatchTrendItem]
+
+class StatusUpdateResponse(BaseModel):
+    status: str
+    message: str
