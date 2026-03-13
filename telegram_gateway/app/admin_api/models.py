@@ -55,11 +55,12 @@ class PlatformAnalyticsResponse(BaseModel):
     connections: int
     feedback_count: int
 
+class UserSegmentItem(BaseModel):
+    name: str
+    value: int
+
 class UserSegmentationResponse(BaseModel):
-    students: int = 0
-    startup_founders: int = 0
-    developers: int = 0
-    investors: int = 0
+    segments: List[UserSegmentItem]
 
 class SystemHealthResponse(BaseModel):
     mongodb: str

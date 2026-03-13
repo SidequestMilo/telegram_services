@@ -10,12 +10,15 @@ from .models import (
 )
 from .auth import verify_admin
 from .service import AdminService
+from .users_router import router as users_router
 
 router = APIRouter(
     prefix="/api",
     tags=["admin"],
     dependencies=[Depends(verify_admin)]
 )
+
+router.include_router(users_router, prefix="")
 
 # New router for broadcast with /admin prefix
 broadcast_router = APIRouter(
@@ -39,35 +42,6 @@ def get_admin_service() -> AdminService:
         redis_client=redis_client, 
         tg_bot_token=settings.TELEGRAM_BOT_TOKEN
     )
-
-@router.get("/users", response_model=UserListResponse)
-async def get_all_users(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
-    user_type: Optional[str] = None,
-    location: Optional[str] = None,
-    search: Optional[str] = None,
-    service: AdminService = Depends(get_admin_service)
-):
-    return await service.get_users(page, limit, user_type, location, search)
-
-@router.patch("/users/{telegram_id}/status", response_model=StatusUpdateResponse)
-async def update_user_status(
-    telegram_id: str,
-    status: str = Query(..., regex="^(Active|Suspended|Inactive)$"),
-    service: AdminService = Depends(get_admin_service)
-):
-    return await service.update_user_status(telegram_id, status)
-
-@router.get("/users/{telegram_id}", response_model=UserProfile)
-async def get_single_user(
-    telegram_id: str,
-    service: AdminService = Depends(get_admin_service)
-):
-    user = await service.get_user_by_id(telegram_id)
-    if not user:
-         raise HTTPException(status_code=404, detail="User not found")
-    return user
 
 @router.get("/matches", response_model=MatchListResponse)
 async def get_all_matches(
@@ -123,10 +97,6 @@ async def get_activity(
 @router.get("/analytics", response_model=PlatformAnalyticsResponse)
 async def platform_analytics(service: AdminService = Depends(get_admin_service)):
     return await service.get_platform_analytics()
-
-@router.get("/users/segments", response_model=UserSegmentationResponse)
-async def user_segmentation(service: AdminService = Depends(get_admin_service)):
-    return await service.get_user_segments()
 
 @router.get("/system-health", response_model=SystemHealthResponse)
 async def system_health(service: AdminService = Depends(get_admin_service)):
