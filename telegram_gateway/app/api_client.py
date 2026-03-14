@@ -298,7 +298,7 @@ class InternalAPIClient:
 
                      await self.database.update_user_preferences(telegram_user_id, merged_entities)
                      
-                     user_profile = await self.database.get_user_profile(telegram_user_id)
+                     user_profile = await self.database.get_user_profile(telegram_user_id) or {}
                      name = user_profile.get("name", f"User {telegram_user_id}")
                      intent = result.get("intent", "find_match")
                      
@@ -561,10 +561,11 @@ class InternalAPIClient:
         next_candidate = get_next_match(target_user_id, items_to_return)
 
         if action == "CONNECT":
+            display_items = candidates[:5] if candidates else [next_candidate]
             return {
                 "type": "match_list",
-                "content": "**suggested match for you:**",
-                "items": [next_candidate]
+                "content": "**your top matches:**",
+                "items": display_items
             }
         elif action == "SKIP":
             import random
@@ -594,6 +595,9 @@ class InternalAPIClient:
                 current_username = current_profile.get("username")
 
                 logger.info(f"[MATCH ACCEPTED] User {telegram_user_id} connecting with {target_tg_id}.")
+
+                if self.database:
+                    await self.database.record_connection(telegram_user_id, target_tg_id, "accepted")
 
                 target_profile = await self.database.get_user_profile(target_tg_id) if self.database else {}
                 target_name = target_profile.get("name", provided_target_name) if target_profile else provided_target_name

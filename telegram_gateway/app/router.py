@@ -237,17 +237,19 @@ class TelegramRouter:
             # Legacy cleanup just in case any user is stuck in it
             await self.session_manager.set_persistent_state(telegram_user_id, None)
             
-        # Every 3rd message, extract personality in the background
         db = getattr(self.api_client, "database", None)
         if db:
             count = await db.increment_message_count(telegram_user_id)
             if count % 3 == 0:
-                asyncio.create_task(
-                    self.api_client.call_ai_interpret(
-                        chat_id, telegram_user_id, text, request_id,
-                        merge_preferences=True
-                    )
-                )
+                async def _bg_extract():
+                    try:
+                        await self.api_client.call_ai_interpret(
+                            chat_id, telegram_user_id, text, request_id,
+                            merge_preferences=True
+                        )
+                    except Exception as e:
+                        logger.error(f"Background personality extraction failed: {e}")
+                asyncio.create_task(_bg_extract())
 
         return await self.api_client.call_ai_chat(
             chat_id,

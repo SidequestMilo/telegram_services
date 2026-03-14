@@ -245,6 +245,60 @@ class Database:
             logger.error(f"Error storing match result: {e}")
             return False
 
+    async def record_connection(
+        self,
+        from_user_id: int,
+        to_user_id: int,
+        status: str = "pending",
+    ) -> bool:
+        """Record a connection request between two users."""
+        if self.db is None:
+            return False
+        try:
+            from datetime import datetime
+            await self.db.connections.update_one(
+                {
+                    "from_user_id": from_user_id,
+                    "to_user_id": to_user_id,
+                },
+                {
+                    "$set": {
+                        "status": status,
+                        "updated_at": datetime.utcnow(),
+                    },
+                    "$setOnInsert": {
+                        "from_user_id": from_user_id,
+                        "to_user_id": to_user_id,
+                        "created_at": datetime.utcnow(),
+                    },
+                },
+                upsert=True,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error recording connection: {e}")
+            return False
+
+    async def get_connection_status(
+        self, user_a: int, user_b: int
+    ) -> Optional[str]:
+        """Check if a connection exists between two users in either direction."""
+        if self.db is None:
+            return None
+        try:
+            doc = await self.db.connections.find_one(
+                {
+                    "$or": [
+                        {"from_user_id": user_a, "to_user_id": user_b},
+                        {"from_user_id": user_b, "to_user_id": user_a},
+                    ]
+                }
+            )
+            return doc.get("status") if doc else None
+        except Exception as e:
+            logger.error(f"Error checking connection: {e}")
+            return None
+
     async def get_personality_profile(self, telegram_user_id: int) -> Optional[dict]:
         """Retrieve the user's full personality profile (preferences + profile combined)."""
         if self.db is None:

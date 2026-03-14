@@ -149,24 +149,26 @@ class TelegramResponseFormatter:
                     reason = item.get("reason", "")
                     match_percent = item.get("match_percentage")
                     
-                    shortened_reason_parts = []
-                    for part in reason.split(" | "):
-                        if ": " in part:
-                            category, items_str = part.split(": ", 1)
-                            reason_items = [i.strip() for i in items_str.split(",")]
-                            if len(reason_items) > 3:
-                                shortened_reason_parts.append(f"{category}: {', '.join(reason_items[:3])}...")
+                    short_reason = ""
+                    if reason:
+                        shortened_reason_parts = []
+                        for part in reason.split(" | "):
+                            if ": " in part:
+                                category, items_str = part.split(": ", 1)
+                                reason_items = [i.strip() for i in items_str.split(",")]
+                                if len(reason_items) > 3:
+                                    shortened_reason_parts.append(f"{category}: {', '.join(reason_items[:3])}...")
+                                else:
+                                    shortened_reason_parts.append(part)
                             else:
                                 shortened_reason_parts.append(part)
-                        else:
-                            shortened_reason_parts.append(part)
-                            
-                    short_reason = " | ".join(shortened_reason_parts)
+                        short_reason = " | ".join(shortened_reason_parts)
                     
+                    display_reason = short_reason or "a potential match based on your vibe!"
                     if match_percent is not None:
-                        content += f"\n\n**{name}** ({match_percent}% match)\n{short_reason}"
+                        content += f"\n\n**{name}** ({match_percent}% match)\n{display_reason}"
                     else:
-                        content += f"\n\n**{name}**\n{short_reason}"
+                        content += f"\n\n**{name}**\n{display_reason}"
                     
                     user_id = item.get("user_id", name)
                     
