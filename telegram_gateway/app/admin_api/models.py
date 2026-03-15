@@ -54,6 +54,8 @@ class PlatformAnalyticsResponse(BaseModel):
     total_matches: int
     connections: int
     feedback_count: int
+    growth: List[dict] = []
+    activity: List[dict] = []
 
 class UserSegmentItem(BaseModel):
     name: str
@@ -86,9 +88,10 @@ class BroadcastHistoryResponse(BaseModel):
 
 class MatchTrendItem(BaseModel):
     date: str
-    count: int
-    success_count: int
-    average_compatibility: float
+    generated: int
+    success: int
+    skipped: int
+    score: float
 
 class MatchTrendsResponse(BaseModel):
     trends: List[MatchTrendItem]
