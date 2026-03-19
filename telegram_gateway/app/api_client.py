@@ -56,12 +56,22 @@ class InternalAPIClient:
     ) -> Optional[Dict[str, Any]]:
         """
         Make HTTP request with retry logic.
+        
+        Args:
+            url: Target URL
+            payload: Request payload
+            timeout: Request timeout in seconds
+            service_name: Name of the service for logging
+            request_id: Unique request ID
+            
+        Returns:
+            Response JSON or None on failure
         """
         if not self.client:
             logger.error("HTTP client not initialized")
             return None
         
-        for attempt in range(2):
+        for attempt in range(2):  # 0 = first attempt, 1 = retry
             try:
                 import time
                 start_time = time.time()
@@ -111,7 +121,7 @@ class InternalAPIClient:
                     f"{service_name} timeout (attempt {attempt + 1}): {e}",
                     extra={"request_id": request_id, "service": service_name}
                 )
-                if attempt == 1:
+                if attempt == 1:  # Last retry
                     return None
                     
             except httpx.HTTPStatusError as e:
@@ -129,6 +139,7 @@ class InternalAPIClient:
                     except Exception as db_e:
                         logger.error(f"Failed to store API request: {db_e}")
                 
+                # Log response.text for HTTP errors (status_code >= 400)
                 error_message = f"{service_name} HTTP error: {e.response.status_code}"
                 if e.response.status_code >= 400:
                     error_message += f" - {e.response.text}"
@@ -138,7 +149,7 @@ class InternalAPIClient:
                         "request_id": request_id,
                         "service": service_name,
                         "status_code": e.response.status_code,
-                        "response_text": e.response.text
+                        "response_text": e.response.text # Also add to extra for structured logging
                     }
                 )
                 if attempt == 1:
@@ -162,7 +173,19 @@ class InternalAPIClient:
         message_text: str,
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Call AI Microservice /chat endpoint."""
+        """
+        Call AI Microservice /chat endpoint.
+        
+        Args:
+            chat_id: Persistent session ID (UUID)
+            telegram_user_id: Telegram user ID
+            message_text: User message
+            request_id: Request ID
+            
+        Returns:
+            AI response payload
+        """
+        # Logging/Telemetry for the chat request
         logger.info(
             f"Sending chat message to AI model {self.settings.AI_MODEL_ID}",
             extra={
@@ -183,6 +206,8 @@ class InternalAPIClient:
             "timeout_seconds": self.settings.AI_TIMEOUT_SECONDS
         }
         
+        # Use conversation_url as the AI service base URL
+        # e.g., http://3.110.172.55:8000/chat
         result = await self._make_request(
             f"{self.conversation_url}/chat",
             payload,
@@ -204,7 +229,16 @@ class InternalAPIClient:
         prompt: str,
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Call AI Microservice /generate endpoint."""
+        """
+        Call AI Microservice /generate endpoint.
+        
+        Args:
+            prompt: Generation prompt
+            request_id: Request ID
+            
+        Returns:
+            AI generation response
+        """
         payload = {
             "model_id": self.settings.AI_MODEL_ID,
             "prompt": prompt,
@@ -221,6 +255,7 @@ class InternalAPIClient:
             request_id
         )
 
+        # Standardize return of text content if possible
         if result and ("response" in result or "text" in result or "content" in result):
              content = result.get("response") or result.get("text") or result.get("content")
              return {
@@ -235,11 +270,21 @@ class InternalAPIClient:
         chat_id: str,
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Request session reset (clear history)."""
+        """
+        Request session reset (clear history).
+        Instead of calling external API (which may not exist), we signal the gateway to rotate the session ID.
+        
+        Args:
+            chat_id: Persistent session ID (UUID)
+            request_id: Request ID
+            
+        Returns:
+            System action response to trigger session rotation
+        """
         return {
             "type": "system_action",
             "action": "reset_session",
-            "content": "chat history cleared! we can start fresh now"
+            "content": "🧹 **Chat History Cleared**.\n\nWe can start fresh now!"
         }
 
     async def call_ai_interpret(
@@ -250,18 +295,31 @@ class InternalAPIClient:
         request_id: str,
         merge_preferences: bool = False
     ) -> Optional[Dict[str, Any]]:
-        """Call AI Microservice /conversation/interpret endpoint."""
+        """
+        Call AI Microservice /conversation/interpret endpoint.
+        
+        Args:
+            chat_id: Persistent session ID
+            telegram_user_id: User's telegram ID
+            message_text: Text to interpret
+            request_id: Request ID
+            merge_preferences: Whether to merge new preferences with the existing ones
+            
+        Returns:
+            Interpretation result
+        """
         payload = {
             "chat_id": chat_id,
             "user_id": str(telegram_user_id),
             "model_id": self.settings.AI_MODEL_ID,
             "message": message_text,
-            "context": {"type": "partner_matching"},
+            "context": {"type": "connection_matching"},
             "max_tokens": self.settings.AI_MAX_TOKENS,
             "temperature": self.settings.AI_TEMPERATURE,
             "timeout_seconds": self.settings.AI_TIMEOUT_SECONDS
         }
         
+        # Note: path is /conversation/interpret based on user requirement
         result = await self._make_request(
             f"{self.conversation_url}/conversation/interpret",
             payload,
@@ -273,6 +331,7 @@ class InternalAPIClient:
         if result:
              logger.info(f"AI Interpretation result: {result}")
              
+             # Store interpreted preferences in the database
              if self.database:
                  entities = result.get("entities")
                  if entities is not None:
@@ -291,14 +350,20 @@ class InternalAPIClient:
                                      merged_entities[k] = merged_list
                                  else:
                                      merged_entities[k] = v
-                             elif isinstance(v, str) and v:
-                                 merged_entities[k] = v
+                             elif isinstance(v, str):
+                                 existing_str = existing.get(k, "")
+                                 if isinstance(existing_str, str) and existing_str:
+                                     if v.lower() not in existing_str.lower():
+                                         merged_entities[k] = f"{existing_str}, {v}"
+                                 else:
+                                     merged_entities[k] = v
                              else:
                                  merged_entities[k] = v
 
                      await self.database.update_user_preferences(telegram_user_id, merged_entities)
                      
-                     user_profile = await self.database.get_user_profile(telegram_user_id) or {}
+                     # Get current user profile for the name and UPSERT to vector DB
+                     user_profile = await self.database.get_user_profile(telegram_user_id)
                      name = user_profile.get("name", f"User {telegram_user_id}")
                      intent = result.get("intent", "find_match")
                      
@@ -313,12 +378,13 @@ class InternalAPIClient:
              
              reply_text = result.get("reply")
              
+             # If the interpret endpoint lacks a direct reply (e.g. initial /connect)
              if not reply_text:
                  logger.info("No explicit 'reply' found from interpret endpoint, using default text")
-                 reply_text = "got it! your preferences have been updated.\n\nuse /matches to see your matches"
+                 reply_text = "Got it! Your connection preferences have been updated.\n\nUse `/matches` command to get your match"
              else:
                  if "/matches" not in reply_text:
-                     reply_text += "\n\nuse /matches to see your matches"
+                     reply_text += "\n\nUse `/matches` command to get your match"
              return {
                  "type": "text",
                  "content": reply_text
@@ -326,7 +392,7 @@ class InternalAPIClient:
         
         return {
             "type": "text",
-            "content": "hmm, something went wrong. try again?"
+            "content": "Failed to interpret message."
         }
 
     async def call_vector_upsert(
@@ -338,7 +404,10 @@ class InternalAPIClient:
         name: str,
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Call AI Microservice /conversation/vector endpoint to upsert user profile for matching."""
+        """
+        Call AI Microservice /conversation/vector endpoint to upsert user profile
+        for matching.
+        """
         payload = {
             "user_id": str(telegram_user_id),
             "data": {
@@ -362,58 +431,65 @@ class InternalAPIClient:
         request_id: str,
         chat_id: str = "unknown"
     ) -> Optional[Dict[str, Any]]:
-        """Call user profile service."""
-        logger.info(f"Calling user profile service for command {command}")
+        """
+        Call user profile service.
+        
+        Returns:
+            Mock response with user profile or command result
+        """
+        logger.info(f"[MOCK] Calling user profile service for command {command}")
         
         if command == "/start":
             return {
                 "type": "text",
-                "content": "hey! i'm milo, your matchmaking companion\n\n"
-                          "i help you find your perfect match by getting to know who you really are "
-                          "- through conversation, not forms.\n\n"
-                          "**here's what i can do:**\n"
-                          "/profile - set up or view your profile\n"
-                          "/connect - tell me what you're looking for\n"
-                          "/new - add more preferences\n"
-                          "/matches - see your match suggestions\n"
-                          "/clear - start fresh\n"
-                          "/help - see all commands\n\n"
-                          "start by setting up your profile with /profile, or just start chatting with me!",
+                "content": "👋 Hi, i’m Milo - I match you to whoever you want - Is there someone you would like to meet?\n\n"
+                          "Available Commands:\n"
+                          "/profile - View and update your profile details\n"
+                          "/connect - Find or request new matches\n"
+                          "/new - Add new connection preferences\n"
+                          "/matches - View your current match suggestions\n"
+                          "/clear - Clear your conversation history\n"
+                          "/help - See all available bot commands\n\n"
+                          "Use /profile command to set up your profile",
                 "internal_user_id": f"user_{telegram_user_id}",
                 "new_user": True
             }
         elif command == "/help":
             return {
                 "type": "text",
-                "content": "**available commands:**\n\n"
-                          "/start - welcome message\n"
-                          "/profile - view or set up your profile\n"
-                          "/connect - share what you're looking for in a partner\n"
-                          "/new - add more preferences to your profile\n"
-                          "/matches - see your match suggestions\n"
-                          "/clear - clear conversation history\n"
-                          "/generate <prompt> - ai generation\n\n"
-                          "or just message me naturally - the more we chat, the better i understand your vibe!"
+                "content": "🤖 **Available Commands:**\n\n"
+                          "/start - Welcome message\n"
+                          "/profile - View your profile details\n"
+                          "/connect - Find new matches\n"
+                          "/matches - View your matches\n"
+                          "/clear - Clear conversation history\n"
+                          "/generate <prompt> - AI Generation\n\n"
+                          "Just message me naturally to start a conversation!"
             }
         elif command == "/profile":
             return {
                 "type": "text",
-                "content": "**your profile**\n\n"
-                          "here are your details. use /connect to share what you're looking for!\n\n"
+                "content": "👤 **Your Profile**\n\n"
+                          "Here are your details. Use /connect to find new matches based on your profile!\n\n"
                           f"Status: Active\nID: {telegram_user_id}",
                 "internal_user_id": f"user_{telegram_user_id}"
             }
         elif command == "/matches":
             return {
                 "type": "match_list",
-                "content": "**your matches**",
-                "items": []
+                "content": "❤️ **Your Matches**",
+                "items": [
+                    {"name": "Ankit", "reason": "Both interested in ML and AI"},
+                    {"name": "Priya", "reason": "Share passion for startups"},
+                    {"name": "Rahul", "reason": "Both love hiking"},
+                    {"name": "Sara", "reason": "Fellow Python developer"}
+                ]
             }
         elif command == "/connect":
              return await self.call_ai_interpret(
                 chat_id,
                 telegram_user_id,
-                message_text="I want to find a partner match",
+                message_text="I want to connect with someone",
                 request_id=request_id
             )
         elif command == "/clear":
@@ -422,9 +498,13 @@ class InternalAPIClient:
                 request_id
             )
         elif command.startswith("FILE:"):
+             # Handle file upload mock
+             filename = command.split(":", 1)[1]
              return {
                 "type": "text",
-                "content": "i appreciate the effort, but i don't need files! just chat with me and i'll learn about you naturally"
+                "content": f"📄 **Resume Received**: `{filename}`\n\n"
+                           "I'm analyzing your profile... (Mock processed)\n"
+                           "Profile updated successfully!"
             }
         return {
             "type": "text",
@@ -440,13 +520,16 @@ class InternalAPIClient:
         target_user_id: Optional[str],
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Call matching service endpoint."""
+        """
+        Call matching service endpoint.
+        """
         logger.info(f"Calling matching service for action {action} and user {telegram_user_id}")
         
+        # Default fallback candidate
         candidate = {
-            "name": "Unknown",
-            "reason": "no matches available yet - keep chatting with me to build your profile!",
-            "rating": 0
+            "name": "Alex (Fallback)",
+            "reason": "We couldn't generate an exact specific match right now, but here's someone interested in connecting!",
+            "rating": 4.5
         }
         
         no_matches_found = False
@@ -460,6 +543,7 @@ class InternalAPIClient:
             result = await self._make_request(
                 f"{self.conversation_url}/conversation/matching",
                 payload,
+                # use conversation timeout since matching can involve AI latency
                 self.conversation_timeout,
                 "MatchingService/Match",
                 request_id
@@ -467,6 +551,7 @@ class InternalAPIClient:
             
             candidates = []
             
+            # Extract matches list flexibly
             matches = None
             if isinstance(result, list):
                 matches = result
@@ -481,32 +566,31 @@ class InternalAPIClient:
                         match_user = match_data.get("user_id", f"User_{target_user_id}" if target_user_id else "Unknown User")
                         data = match_data.get("data", {})
                         
+                        # Some versions of the endpoint return entities directly in data, while others nest it
                         entities = data.get("entities") or data
                         
                         interests = entities.get("interests", [])
-                        values = entities.get("values", [])
-                        personality = entities.get("personality_traits", [])
-                        lifestyle = entities.get("lifestyle", [])
-                        humor = entities.get("humor_style", "")
+                        skills = entities.get("skills", [])
+                        goals = entities.get("goals", [])
                         location = entities.get("location", "")
+                        role = entities.get("role", "")
                         
                         reason_parts = []
+                        if role:
+                            reason_parts.append(f"Role: {role.title()}")
+                        if goals:
+                            reason_parts.append(f"Goals: {', '.join(goals)}")
                         if interests:
-                            reason_parts.append(f"Interests: {', '.join(interests[:3])}")
-                        if values:
-                            reason_parts.append(f"Values: {', '.join(values[:3])}")
-                        if personality:
-                            reason_parts.append(f"Personality: {', '.join(personality[:3])}")
-                        if lifestyle:
-                            reason_parts.append(f"Lifestyle: {', '.join(lifestyle[:3])}")
-                        if humor:
-                            reason_parts.append(f"Humor: {humor}")
+                            reason_parts.append(f"Interests: {', '.join(interests)}")
+                        if skills:
+                            reason_parts.append(f"Skills: {', '.join(skills)}")
                         if location:
                             reason_parts.append(f"Location: {location}")
                             
-                        reason_str = " | ".join(reason_parts) if reason_parts else "a potential match based on your vibe!"
+                        reason_str = " | ".join(reason_parts) if reason_parts else "A great potential connection based on your request!"
                         score = match_data.get("score", 0.0)
                         
+                        # Prioritize explicitly returned name
                         explicit_name = match_data.get("name")
                         if explicit_name:
                             display_name = explicit_name
@@ -522,12 +606,13 @@ class InternalAPIClient:
                         })
                     
                     if candidates:
-                        candidate = candidates[0]
+                        candidate = candidates[0]  # Update fallback just in case
                         
                     if self.database:
                         await self.database.store_match_result(telegram_user_id, {"matches": matches})
             elif isinstance(result, dict) and result.get("match"):
-                pass
+                # Fallback to older format handling if necessary
+                pass # Not removing the old entirely just in case, but keeping it simple
                     
         except Exception as e:
             logger.error(f"Error calling matching API: {e}")
@@ -535,19 +620,22 @@ class InternalAPIClient:
         if no_matches_found:
             return {
                 "type": "text",
-                "content": "no perfect matches found yet! keep chatting with me to build your profile, or check back later"
+                "content": "No perfect matches found at the moment! Try broadening your profile or checking back later. 🔍"
             }
             
         items_to_return = candidates if candidates else [candidate]
         
+        # Helper function to find the next match in the list
         def get_next_match(current_target: Optional[str], items: list):
             if not current_target or not items:
                 return items[0] if items else candidate
                 
+            # Try to find exactly where we currently are
             current_idx = -1
             current_target_clean = current_target.replace("user_", "")
             
             for i, item in enumerate(items):
+                # match the display name format or matching user_id
                 item_id_clean = str(item.get("user_id", "")).replace("user_", "")
                 item_name_clean = item.get("name", "")
                 
@@ -555,17 +643,17 @@ class InternalAPIClient:
                     current_idx = i
                     break
                     
+            # Wrap around or safely get the next item
             next_idx = (current_idx + 1) % len(items)
             return items[next_idx]
             
         next_candidate = get_next_match(target_user_id, items_to_return)
 
         if action == "CONNECT":
-            display_items = candidates[:5] if candidates else [next_candidate]
             return {
                 "type": "match_list",
-                "content": "**your top matches:**",
-                "items": display_items
+                "content": "🔍 **Suggested Match for You:**",
+                "items": [next_candidate]  # Only show the 1st
             }
         elif action == "SKIP":
             import random
@@ -573,15 +661,16 @@ class InternalAPIClient:
             emoji = random.choice(emojis)
             return {
                 "type": "match_list",
-                "content": f"skipped! how about this one? {emoji}",
+                "content": f"Skipped {target_user_id}. How about this match? {emoji}",
                 "items": [next_candidate]
             }
         elif action == "ACCEPT":
             import re
             
+            # Extract target user_id and optionally target_name if separated by |
             parts = target_user_id.split("|", 1) if target_user_id else []
             if not parts:
-                return {"type": "text", "content": "invalid match request."}
+                return {"type": "text", "content": "❌ Invalid match request."}
                 
             raw_target_id = parts[0]
             provided_target_name = parts[1] if len(parts) > 1 else raw_target_id
@@ -594,24 +683,42 @@ class InternalAPIClient:
                 current_name = current_profile.get("name", "A connection")
                 current_username = current_profile.get("username")
 
-                logger.info(f"[MATCH ACCEPTED] User {telegram_user_id} connecting with {target_tg_id}.")
+                logger.info(f"🔗 [MATCH ACCEPTED] User {telegram_user_id} generated a native direct message portal to connect with {target_tg_id}.")
 
                 if self.database:
                     await self.database.record_connection(telegram_user_id, target_tg_id, "accepted")
 
+                # Fetch target's name so we can nicely link to it
                 target_profile = await self.database.get_user_profile(target_tg_id) if self.database else {}
                 target_name = target_profile.get("name", provided_target_name) if target_profile else provided_target_name
                 target_username = target_profile.get("username") if target_profile else None
 
+                # Telegram syntax for private chat
                 my_url = f"https://t.me/{current_username}" if current_username else f"tg://user?id={telegram_user_id}"
                 their_url = f"https://t.me/{target_username}" if target_username else f"tg://user?id={target_tg_id}"
 
-                target_message = f"<b>New Match!</b>\n\n{current_name} wants to connect with you!\n\nStart chatting:"
+                current_preferences = await self.database.get_user_preferences(telegram_user_id) if self.database else {}
+                preferences_text = ""
+                if current_preferences:
+                    pref_parts = []
+                    for key, val in current_preferences.items():
+                        if val:
+                            if isinstance(val, list):
+                                pref_parts.append(f"{key.title()}: {', '.join(str(v) for v in val)}")
+                            else:
+                                pref_parts.append(f"{key.title()}: {val}")
+                    if pref_parts:
+                        preferences_text = " | ".join(pref_parts)
+
+                if preferences_text:
+                    target_message = f"🎉 <b>New Connection!</b>\n\n{current_name} is interested in the ({preferences_text}) and wants to connect with you!\n\nYou can now chat natively in a private Telegram DM below:"
+                else:
+                    target_message = f"🎉 <b>New Connection!</b>\n\n{current_name} wants to connect with you!\n\nYou can now chat natively in a private Telegram DM below:"
                 target_markup = None
                 if current_username:
-                    target_markup = {"inline_keyboard": [[{"text": f"Message {current_name}", "url": my_url}]]}
+                    target_markup = {"inline_keyboard": [[{"text": f"📩 Message {current_name}", "url": my_url}]]}
                 else:
-                    target_message += f'\n<a href="{my_url}">Message {current_name}</a>'
+                    target_message += f'\n👉 <a href="{my_url}">Message {current_name}</a>\n_(If unclickable, they must set a Telegram Username)_'
 
                 await self.send_direct_message(
                     target_tg_id,
@@ -620,19 +727,20 @@ class InternalAPIClient:
                     reply_markup=target_markup
                 )
 
+                # Send a backend push/system notification that a new match connection occurred
                 await self.call_notification(
                     str(target_tg_id),
                     "new_match",
                     request_id
                 )
 
-                current_message = f"connected with {target_name}!\n\n<b>Chat Ready</b>\nStart a direct Telegram chat:"
+                current_message = f"✅ Connected with {target_name}!\n\n💬 <b>Private Chat Ready</b>\nYou can now start a direct Telegram chat with them here:"
                 current_buttons = None
                 
                 if target_username:
-                    current_buttons = [[{"text": f"Message {target_name}", "url": their_url}]]
+                    current_buttons = [[{"text": f"📩 Message {target_name}", "url": their_url}]]
                 else:
-                    current_message += f'\n<a href="{their_url}">Message {target_name}</a>'
+                    current_message += f'\n👉 <a href="{their_url}">Message {target_name}</a>\n_(If unclickable, they must set a Telegram Username)_'
 
                 response_dict = {
                     "type": "text",
@@ -647,13 +755,14 @@ class InternalAPIClient:
             else:
                 return {
                     "type": "match_list",
-                    "content": f"connected with {target_user_id}! here's your next match:",
+                    "content": f"✅ Connected with {target_user_id}!\n\nHere is your next match 👇",
                     "items": [next_candidate]
                 }
         
+        # Fallback for REJECT (if we use it)
         return {
             "type": "text",
-            "content": f"action '{action}' recorded.",
+            "content": f"✅ Action '{action}' recorded for {target_user_id}.",
             "success": True
         }
     
@@ -663,7 +772,9 @@ class InternalAPIClient:
         notification_type: str,
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Call notification service."""
+        """
+        Call notification service.
+        """
         payload = {
             "user_id": internal_user_id,
             "notification_type": notification_type,
