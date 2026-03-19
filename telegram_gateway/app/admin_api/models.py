@@ -70,9 +70,9 @@ class SystemHealthResponse(BaseModel):
     telegram_api: str
 
 class SystemResourcesResponse(BaseModel):
-    cpu_usage: float
-    memory_usage: float
-    disk_usage: float
+    cpu: float
+    memory: Dict[str, float]
+    redis: float
     uptime: float
 
 class BroadcastHistoryItem(BaseModel):
