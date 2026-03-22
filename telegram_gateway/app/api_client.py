@@ -540,10 +540,13 @@ class InternalAPIClient:
                 "top_k": 5
             }
             
+            # Fetch current connections to exclude from matches
+            connections = await self.database.get_all_connections(telegram_user_id) if self.database else []
+            excluded_ids = {str(c["other_id"]) for c in connections}
+            
             result = await self._make_request(
                 f"{self.conversation_url}/conversation/matching",
                 payload,
-                # use conversation timeout since matching can involve AI latency
                 self.conversation_timeout,
                 "MatchingService/Match",
                 request_id
@@ -589,14 +592,22 @@ class InternalAPIClient:
                             
                         reason_str = " | ".join(reason_parts) if reason_parts else "A great potential connection based on your request!"
                         score = match_data.get("score", 0.0)
-                        
-                        # Prioritize explicitly returned name
-                        explicit_name = match_data.get("name")
-                        if explicit_name:
-                            display_name = explicit_name
-                        else:
-                            display_name = match_user.replace("user_", "User ") if match_user.startswith("user_") else match_user
-                        
+                        # Fetch real name from DB if it's unknown or just a user_id
+                        display_name = match_data.get("name") or match_user
+                        if self.database and (not display_name or display_name == match_user or display_name == "Unknown"):
+                            try:
+                                # try to parse match_user as int if possible
+                                uid = int(str(match_user).replace("user_", ""))
+                                db_profile = await self.database.get_user_profile(uid)
+                                if db_profile and db_profile.get("name"):
+                                    display_name = db_profile.get("name")
+                            except (ValueError, TypeError):
+                                pass
+
+                        # Skip if already connected
+                        if str(match_user) in excluded_ids:
+                             continue
+
                         candidates.append({
                             "user_id": match_user,
                             "name": display_name,

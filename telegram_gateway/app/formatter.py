@@ -64,6 +64,31 @@ class TelegramResponseFormatter:
         if parse_mode:
             payload["parse_mode"] = parse_mode
         return payload
+
+    @staticmethod
+    def format_reply_keyboard(
+        chat_id: int,
+        content: str,
+        buttons: List[List[Dict[str, Any]]],
+        resize_keyboard: bool = True,
+        one_time_keyboard: bool = False,
+        parse_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Format message with reply keyboard (persistent buttons).
+        """
+        payload = {
+            "chat_id": chat_id,
+            "text": content,
+            "reply_markup": {
+                "keyboard": buttons,
+                "resize_keyboard": resize_keyboard,
+                "one_time_keyboard": one_time_keyboard
+            }
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return payload
     
     @staticmethod
     def format_edit_message(
@@ -125,8 +150,11 @@ class TelegramResponseFormatter:
             
             if response_type == "text":
                 buttons = response.get("buttons")
+                keyboard = response.get("keyboard")
                 if message_id:
                     return self.format_edit_message(chat_id, message_id, content, buttons, parse_mode=parse_mode)
+                if keyboard:
+                    return self.format_reply_keyboard(chat_id, content, keyboard, parse_mode=parse_mode)
                 if buttons:
                     return self.format_inline_keyboard(chat_id, content, buttons, parse_mode=parse_mode)
                 return self.format_text_message(chat_id, content, parse_mode=parse_mode)

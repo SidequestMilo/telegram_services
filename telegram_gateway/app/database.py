@@ -3,6 +3,7 @@ Persistent database for user mappings using MongoDB (Motor).
 """
 import logging
 from typing import Optional, List
+from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorClient
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,29 @@ class Database:
             logger.error(f"Error updating profile field {field}: {e}")
             return False
 
+    async def set_onboarding_status(self, telegram_user_id: int, is_complete: bool) -> bool:
+        """Set the onboarding completion status for a user."""
+        if self.db is None: return False
+        try:
+            await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$set": {"is_profile_complete": is_complete, "telegram_user_id": telegram_user_id}},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error setting onboarding status: {e}")
+            return False
+
+    async def get_onboarding_status(self, telegram_user_id: int) -> bool:
+        """Check if a user has completed onboarding."""
+        if self.db is None: return False
+        try:
+            doc = await self.db.users.find_one({"telegram_user_id": telegram_user_id})
+            return doc.get("is_profile_complete", False) if doc else False
+        except Exception:
+            return False
+
     async def store_user_mapping(self, telegram_user_id: int, chat_id: str) -> bool:
         """
         Store permanent user mapping.
@@ -210,7 +234,6 @@ class Database:
         if self.db is None:
             return False
         try:
-            from datetime import datetime
             await self.db.api_requests.insert_one({
                 "service_name": service_name,
                 "endpoint": endpoint,
@@ -234,7 +257,6 @@ class Database:
         if self.db is None:
             return False
         try:
-            from datetime import datetime
             await self.db.matches.insert_one({
                 "telegram_user_id": telegram_user_id,
                 "match_data": match_data,
@@ -255,7 +277,6 @@ class Database:
         if self.db is None:
             return False
         try:
-            from datetime import datetime
             await self.db.connections.update_one(
                 {
                     "from_user_id": from_user_id,
@@ -278,6 +299,70 @@ class Database:
         except Exception as e:
             logger.error(f"Error recording connection: {e}")
             return False
+
+    async def get_incoming_requests(self, telegram_user_id: int) -> List[dict]:
+        """Fetch all pending incoming connection requests for a user."""
+        if self.db is None: return []
+        try:
+            cursor = self.db.connections.find({"to_user_id": telegram_user_id, "status": "pending"})
+            requests = []
+            async for doc in cursor:
+                # Include sender name if possible
+                sender = await self.get_user_profile(doc["from_user_id"])
+                doc["from_name"] = sender.get("name", "Unknown") if sender else "Unknown"
+                requests.append(doc)
+            return requests
+        except Exception as e:
+            logger.error(f"Error getting incoming requests: {e}")
+            return []
+
+    async def get_outgoing_requests(self, telegram_user_id: int) -> List[dict]:
+        """Fetch all pending outgoing connection requests for a user."""
+        if self.db is None: return []
+        try:
+            cursor = self.db.connections.find({"from_user_id": telegram_user_id, "status": "pending"})
+            requests = []
+            async for doc in cursor:
+                receiver = await self.get_user_profile(doc["to_user_id"])
+                doc["to_name"] = receiver.get("name", "Unknown") if receiver else "Unknown"
+                requests.append(doc)
+            return requests
+        except Exception as e:
+            logger.error(f"Error getting outgoing requests: {e}")
+            return []
+            
+    async def update_connection_status(self, from_user_id: int, to_user_id: int, status: str) -> bool:
+        """Update the status of a specific connection request."""
+        if self.db is None: return False
+        try:
+            await self.db.connections.update_one(
+                {"from_user_id": from_user_id, "to_user_id": to_user_id},
+                {"$set": {"status": status, "updated_at": datetime.utcnow()}}
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating connection status: {e}")
+            return False
+
+    async def get_all_connections(self, telegram_user_id: int) -> List[dict]:
+        """Fetch all established (accepted) connections for a user."""
+        if self.db is None: return []
+        try:
+            cursor = self.db.connections.find({
+                "$or": [{"from_user_id": telegram_user_id}, {"to_user_id": telegram_user_id}],
+                "status": "accepted"
+            })
+            connections = []
+            async for doc in cursor:
+                other_id = doc["to_user_id"] if doc["from_user_id"] == telegram_user_id else doc["from_user_id"]
+                other_profile = await self.get_user_profile(other_id)
+                doc["other_name"] = other_profile.get("name", "Someone") if other_profile else "Someone"
+                doc["other_id"] = other_id
+                connections.append(doc)
+            return connections
+        except Exception as e:
+            logger.error(f"Error getting all connections: {e}")
+            return []
 
     async def get_connection_status(
         self, user_a: int, user_b: int

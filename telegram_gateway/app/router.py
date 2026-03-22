@@ -48,6 +48,7 @@ class TelegramRouter:
             "SKIP": self._handle_skip_callback,
             "CONFIRM": self._handle_confirm_callback,
             "CANCEL": self._handle_cancel_callback,
+            "PROFILE_EDIT": self._handle_profile_edit_callback,
         }
     
     async def route_update(
@@ -133,6 +134,20 @@ class TelegramRouter:
             "Routing to conversation service",
             extra={"request_id": request_id, "route": "conversation"}
         )
+        
+        # New Matchmaking Logic Integration
+        if text in ["Set Profile", "My Profile"]:
+            # If user already exists, show profile, else start setup
+            user_profile = await self.api_client.database.get_user_profile(telegram_user_id)
+            if user_profile and user_profile.get("name"):
+                return await self._handle_profile_command(chat_id, telegram_user_id, "/profile", request_id)
+            else:
+                 return await self._handle_profile_command(chat_id, telegram_user_id, "/profile setup", request_id)
+        elif text == "Find Matches":
+            return await self._handle_connect_command(chat_id, telegram_user_id, "/connect", request_id)
+        elif text == "View Matches":
+            return await self._handle_matches_command(chat_id, telegram_user_id, "/matches", request_id)
+            
         return await self._handle_text_message(
             chat_id,
             telegram_user_id,
@@ -221,20 +236,49 @@ class TelegramRouter:
         if state == "AWAITING_PROFILE_NAME":
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "name", text)
-            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_OCCUPATION")
-            return {"type": "text", "content": f"Nice to meet you, {text}! What is your occupation?"}
-            
-        if state == "AWAITING_PROFILE_OCCUPATION":
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_INTERESTS")
+            return {"type": "text", "content": "Nice to meet you! Now, tell us about your **Interests** (e.g., Python, entrepreneurship, baking):"}
+
+        if state == "AWAITING_PROFILE_INTERESTS":
             if getattr(self.api_client, "database", None):
-                await self.api_client.database.update_user_profile_field(telegram_user_id, "occupation", text)
+                await self.api_client.database.update_user_profile_field(telegram_user_id, "interests", text)
             await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_LOCATION")
-            return {"type": "text", "content": "Got it. Finally, where are you located?"}
+            return {"type": "text", "content": "Got it! Finally, what is your **Location**?"}
 
         if state == "AWAITING_PROFILE_LOCATION":
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "location", text)
+                await self.api_client.database.set_onboarding_status(telegram_user_id, True)
             await self.session_manager.set_persistent_state(telegram_user_id, None)
-            return {"type": "text", "content": "Profile complete! 🎉 Type /profile to view it, or /connect to pair with others!"}
+            return {
+                "type": "text",
+                "content": "✨ **Profile complete!**\n\nNow you can use 'Find Matches' to see who's around! 🚀",
+                "keyboard": [
+                    [{"text": "My Profile"}],
+                    [{"text": "Find Matches"}, {"text": "View Matches"}]
+                ]
+            }
+            
+        if state == "AWAITING_INTENT_INPUT":
+            # Clear state
+            await self.session_manager.set_persistent_state(telegram_user_id, None)
+            
+            # 1. Interpret to extract and save their preferences into DB
+            await self.api_client.call_ai_interpret(
+                chat_id,
+                telegram_user_id,
+                f"I am looking for: {text}",
+                request_id
+            )
+            
+            # 2. Immediately call matching to show results based on these new preferences
+            return await self.api_client.call_matching(
+                chat_id,
+                telegram_user_id,
+                "CONNECT",
+                None,
+                request_id
+            )
             
         if state == "AWAITING_CONNECT_MATCHES":
             # Legacy cleanup just in case any user is stuck in it
@@ -269,23 +313,58 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle /connect command."""
+        # Check onboarding
+        is_onboarded = await self.api_client.database.get_onboarding_status(telegram_user_id)
+        if not is_onboarded:
+            return {
+                "type": "text",
+                "content": "Please complete your profile first by clicking 'Set Profile'.",
+                "keyboard": [[{"text": "Set Profile"}]]
+            }
+
         # Extract everything after the /connect command
         query = text.lower().replace("/connect", "").strip()
         
         if query:
-            # They provided preferences right in the command so interpret it directly
-            return await self.api_client.call_ai_interpret(
+            # 1. Interpret to save preferences
+            await self.api_client.call_ai_interpret(
                 chat_id,
                 telegram_user_id,
                 message_text=query,
                 request_id=request_id
             )
+            # 2. Return matching results
+            return await self.api_client.call_matching(
+                chat_id,
+                telegram_user_id,
+                "CONNECT",
+                None,
+                request_id
+            )
         else:
-            # Ask the user what they are looking for so they reply next
-            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_CONNECT_PERSON")
+            # Check if user already has an intent
+            # router has access to api_client.database
+            profile = await self.api_client.database.get_personality_profile(telegram_user_id)
+            existing_intent = profile.get("connection_intent") if profile else None
+            
+            if existing_intent:
+                # Reuse existing intent but show how to change it
+                res = await self.api_client.call_matching(
+                    chat_id,
+                    telegram_user_id,
+                    "CONNECT",
+                    None,
+                    request_id
+                )
+                if res.get("type") == "match_list":
+                    res["content"] = f"🔍 **Matching for:** '{existing_intent}'\n\nTo change what you are looking for, just type `/connect [your new intent]`"
+                    return res
+
+            # Ask the user what they are looking for if no intent or matching failed
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_INTENT_INPUT")
             return {
                  "type": "text",
-                 "content": "thats exciting, what kind of person are you looking for?"
+                 "content": "✨ **What are you looking for right now?**\n\n(e.g., 'baking buddy', 'startup partner', 'fellow designer')"
             }
 
     async def _handle_new_command(
@@ -364,12 +443,25 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle /start command."""
-        return await self.api_client.call_user_profile(
-            telegram_user_id,
-            "/start",
-            request_id,
-            chat_id=chat_id
-        )
+        user_profile = await self.api_client.database.get_user_profile(telegram_user_id)
+        is_onboarded = (user_profile and user_profile.get("name"))
+        
+        profile_btn = "My Profile" if is_onboarded else "Set Profile"
+        keyboard = [
+            [{"text": profile_btn}],
+            [{"text": "Find Matches"}, {"text": "View Matches"}]
+        ]
+        
+        if is_onboarded:
+            content = f"Welcome back, **{user_profile.get('name')}**! 🚀\n\nUse 'Find Matches' to connect with others or 'View Matches' to see your requests."
+        else:
+            content = "Hi! Welcome to the Matchmaking System. 🚀\n\nPlease complete your profile first by clicking 'Set Profile' below."
+            
+        return {
+            "type": "text",
+            "content": content,
+            "keyboard": keyboard
+        }
     
     async def _handle_help_command(
         self,
@@ -394,39 +486,51 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle /profile command."""
-        query = text.lower().replace("/profile", "").strip()
-        
-        if getattr(self.api_client, "database", None):
-            profile = await self.api_client.database.get_user_profile(telegram_user_id)
-            has_name = profile.get("name") if profile else None
+        # Check if user wants a new setup
+        if "setup" in text.lower():
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_NAME")
+            return {"type": "text", "content": "📝 **Let's set up your profile!**\n\nFirst, what is your name?"}
             
-            if profile and has_name and query != "setup":
-                name = profile.get("name", "Unknown")
-                occupation = profile.get("occupation", "Unknown")
-                location = profile.get("location", "Unknown")
+        # Get profile from DB
+        profile = await self.api_client.database.get_user_profile(telegram_user_id)
+        if not profile or not profile.get("name"):
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_NAME")
+            return {"type": "text", "content": "You don't have a profile yet! Let's start.\n\nWhat is your **Name**?"}
+            
+        # Build Profile Card
+        name = profile.get("name", "N/A")
+        interests = profile.get("interests", "N/A")
+        location = profile.get("location", "N/A")
+        
+        content = f"👤 **Your Profile**\n\n**Name:** {name}\n**Interests:** {interests}\n**Location:** {location}\n"
+        
+        # Add personality summary if available
+        personality = await self.api_client.database.get_personality_profile(telegram_user_id)
+        if personality:
+            intent = personality.get("connection_intent")
+            if intent:
+                content += f"\n🎯 **Current Goal:** {intent}\n"
                 
-                content = f"👤 **Your Profile**\n\nID: {telegram_user_id}\nName: {name}\nOccupation: {occupation}\nLocation: {location}"
-                
-                preferences = await self.api_client.database.get_user_preferences(telegram_user_id)
-                if preferences:
-                    content += "\n\n🎯 **Your Connection Preferences:**\n"
-                    for key, val in preferences.items():
-                        if not val:
-                            continue
-                        if isinstance(val, list):
-                            display_val = val[:4]
-                            suffix = ", etc..." if len(val) > 4 else ""
-                            content += f"• **{key.title()}**: {', '.join(str(v) for v in display_val)}{suffix}\n"
-                        else:
-                            content += f"• **{key.title()}**: {val}\n"
-                
-                content += "\n📝 Type `/profile setup` to update your details, or `/new` to add more preferences!\n\nUse `/connect` command so that Milo understands your preferences"
-                return {"type": "text", "content": content}
-
+        content += "\nTo update your profile, click the button below or type `/profile setup`."
+        
+        return {
+            "type": "text",
+            "content": content,
+            "buttons": [[{"text": "📝 Edit Profile", "callback_data": "PROFILE_EDIT"}]]
+        }
+    
+    async def _handle_profile_edit_callback(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        param: Optional[str],
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle PROFILE_EDIT callback."""
         await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_NAME")
         return {
             "type": "text",
-            "content": "📝 **Let's set up your profile!**\n\nFirst, what is your name?"
+            "content": "📝 **Profile Edit Mode**\n\nLet's start fresh. What is your **Name**?"
         }
     
     async def _handle_generate_command(
@@ -510,13 +614,56 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle /matches command."""
-        return await self.api_client.call_matching(
-            chat_id,
-            telegram_user_id,
-            "CONNECT",
-            None,
-            request_id
-        )
+        incoming = await self.api_client.database.get_incoming_requests(telegram_user_id)
+        outgoing = await self.api_client.database.get_outgoing_requests(telegram_user_id)
+        all_connections = await self.api_client.database.get_all_connections(telegram_user_id)
+        
+        if not incoming and not outgoing and not all_connections:
+            return {
+                "type": "text",
+                "content": "No matches or requests found yet. Try 'Find Matches' to connect with others!",
+                "keyboard": [[{"text": "Find Matches"}]]
+            }
+            
+        content = "📋 **Your Connections & Requests**\n\n"
+        
+        if all_connections:
+            content += "🤝 **Established Connections:**\n"
+            for conn in all_connections:
+                content += f"• **{conn['other_name']}** (Connected)\n"
+            content += "\n"
+
+        if incoming:
+            content += "📩 **Incoming Requests:**\n"
+            for req in incoming:
+                from_name = req.get("from_name", "Someone")
+                intent = req.get("intent", "match")
+                content += f"• **{from_name}** wants to connect (for: {intent})\n"
+            
+            # Show response buttons for first pending request
+            first = incoming[0]
+            from_name = first.get("from_name", "Someone")
+            return {
+                "type": "text",
+                "content": content + f"\nRespond to **{from_name}**'s request:",
+                "buttons": [
+                    [
+                        {"text": "✅ Accept", "callback_data": f"ACCEPT:{first['from_user_id']}"},
+                        {"text": "❌ Reject", "callback_data": f"REJECT:{first['from_user_id']}"}
+                    ]
+                ]
+            }
+            
+        if outgoing:
+            content += "📤 **Outgoing Requests:**\n"
+            for req in outgoing:
+                to_name = req.get("to_name", "Someone")
+                content += f"• Sent to **{to_name}** ({req['status']})\n"
+                
+        return {
+            "type": "text",
+            "content": content
+        }
     
     async def _route_document(
         self,
@@ -575,13 +722,30 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle ACCEPT callback."""
-        return await self.api_client.call_matching(
-            chat_id,
-            telegram_user_id,
-            "ACCEPT",
-            param,
-            request_id
-        )
+        if not param: return None
+        # Extract target user_id (the requester)
+        try:
+            target_id = int(param.split('|')[0])
+        except (ValueError, IndexError):
+            return {"type": "text", "content": "Error: Invalid request parameter."}
+            
+        success = await self.api_client.database.update_connection_status(target_id, telegram_user_id, "accepted")
+        if not success:
+            return {"type": "text", "content": "Failed to update match status."}
+            
+        # Notify requester
+        user = await self.api_client.database.get_user_profile(telegram_user_id)
+        name = user.get("name", "Someone") if user else "Someone"
+        
+        try:
+            await self.api_client.send_direct_message(
+                target_id,
+                f"🎉 **Match Accepted!**\n\nYou are now connected with **{name}**!"
+            )
+        except Exception:
+            pass # Non-critical if notification fails
+            
+        return {"type": "text", "content": f"✅ Match accepted! You are now connected with the requester."}
     
     async def _handle_reject_callback(
         self,
@@ -591,13 +755,14 @@ class TelegramRouter:
         request_id: str
     ) -> Optional[Dict[str, Any]]:
         """Handle REJECT callback."""
-        return await self.api_client.call_matching(
-            chat_id,
-            telegram_user_id,
-            "REJECT",
-            param,
-            request_id
-        )
+        if not param: return None
+        try:
+            target_id = int(param.split('|')[0])
+        except (ValueError, IndexError):
+            return None
+            
+        await self.api_client.database.update_connection_status(target_id, telegram_user_id, "rejected")
+        return {"type": "text", "content": "❌ Request declined."}
     
     async def _handle_skip_callback(
         self,
