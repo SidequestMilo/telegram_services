@@ -43,8 +43,8 @@ class AdminService:
                 "name": profile.get("name"),
                 "occupation": profile.get("occupation"),
                 "location": profile.get("location"),
-                "interests": profile.get("interests", []),
-                "goals": profile.get("goals", []),
+                "interests": [i.strip() for i in profile.get("interests", "").split(",")] if isinstance(profile.get("interests"), str) else profile.get("interests", []),
+                "goals": [i.strip() for i in profile.get("goals", "").split(",")] if isinstance(profile.get("goals"), str) else profile.get("goals", []),
                 "matches": doc.get("matches_count", 0),
                 "connections": doc.get("connections_count", 0),
                 "status": doc.get("status", "Active")
@@ -231,14 +231,19 @@ class AdminService:
         if not doc: return None
             
         profile = doc.get("profile", {})
+        def ensure_list(val):
+            if isinstance(val, str):
+                return [i.strip() for i in val.split(",") if i.strip()]
+            return val if isinstance(val, list) else []
+
         return {
             "telegram_id": str(doc.get("telegram_user_id")) if doc.get("telegram_user_id") is not None else str(doc.get("_id")),
             "username": profile.get("username", doc.get("username")),
             "name": profile.get("name"),
             "occupation": profile.get("occupation"),
             "location": profile.get("location"),
-            "interests": profile.get("interests", []),
-            "goals": profile.get("goals", []),
+            "interests": ensure_list(profile.get("interests", [])),
+            "goals": ensure_list(profile.get("goals", [])),
             "matches": doc.get("matches_count", 0), 
             "connections": doc.get("connections_count", 0)
         }
