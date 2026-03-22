@@ -21,7 +21,8 @@ class AdminService:
         if self.db is None: return {"users": [], "total": 0}
         
         skip = (page - 1) * limit
-        filter_query = {}
+        # Filter: Only show valid Telegram users
+        filter_query = {"telegram_user_id": {"$exists": True, "$ne": None}}
         if search:
             filter_query["$or"] = [
                 {"profile.name": {"$regex": search, "$options": "i"}},
@@ -404,7 +405,7 @@ class AdminService:
         if self.db is None:
             return {"total_users": 0, "active_users_24h": 0, "new_users_today": 0, "total_matches": 0, "connections": 0, "feedback_count": 0}
             
-        total_users = await self.db.users.count_documents({})
+        total_users = await self.db.users.count_documents({"telegram_user_id": {"$exists": True, "$ne": None}})
         total_matches = await self.db.matches.count_documents({})
         connections = await self.db.connections.count_documents({})
         feedback_count = await self.db.feedback.count_documents({})
@@ -444,6 +445,7 @@ class AdminService:
         if self.db is None: return []
         
         cursor = self.db.users.aggregate([
+            {"$match": {"telegram_user_id": {"$exists": True, "$ne": None}}},
             {
                "$group": {
                   "_id": { "$toLower": { "$ifNull": ["$profile.occupation", "Unknown"] } },
