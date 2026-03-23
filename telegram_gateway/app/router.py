@@ -246,11 +246,28 @@ class TelegramRouter:
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "interests", text)
             await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_LOCATION")
-            return {"type": "text", "content": "Got it! Finally, what is your **Location**?"}
+            return {"type": "text", "content": "Got it! Now, what is your **Location** (e.g., USA, India, UK)?"}
 
         if state == "AWAITING_PROFILE_LOCATION":
+            # Guardrails for location: must be at least 2 chars and contain letters
+            import re
+            is_valid = len(text.strip()) >= 2 and re.search(r'[a-zA-Z]', text)
+            
+            if not is_valid:
+                return {
+                    "type": "text", 
+                    "content": "That doesn't look like a valid location. Please tell us your **Location** (e.g., USA, India, UK):"
+                }
+
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "location", text)
+                
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_REGION")
+            return {"type": "text", "content": "Great! Finally, what is your **Region**? (e.g., California, Maharashtra, London):"}
+
+        if state == "AWAITING_PROFILE_REGION":
+            if getattr(self.api_client, "database", None):
+                await self.api_client.database.update_user_profile_field(telegram_user_id, "region", text)
                 await self.api_client.database.set_onboarding_status(telegram_user_id, True)
             await self.session_manager.set_persistent_state(telegram_user_id, None)
             return {
@@ -504,8 +521,9 @@ class TelegramRouter:
         name = profile.get("name", "N/A")
         interests = profile.get("interests", "N/A")
         location = profile.get("location", "N/A")
+        region = profile.get("region", "N/A")
         
-        content = f"👤 **Your Profile**\n\n**Name:** {name}\n**Interests:** {interests}\n**Location:** {location}\n"
+        content = f"👤 **Your Profile**\n\n**Name:** {name}\n**Interests:** {interests}\n**Location:** {location}\n**Region:** {region}\n"
         
         # Add personality summary if available
         personality = await self.api_client.database.get_personality_profile(telegram_user_id)
@@ -703,10 +721,12 @@ class TelegramRouter:
         name = profile.get("name", "N/A")
         interests = profile.get("interests", "N/A")
         location = profile.get("location", "N/A")
+        region = profile.get("region", "N/A")
         
         content = f"👤 **Profile: {name}**\n\n"
         content += f"**Interests:** {interests}\n"
         content += f"**Location:** {location}\n"
+        content += f"**Region:** {region}\n"
         
         if personality:
             intent = personality.get("connection_intent")
