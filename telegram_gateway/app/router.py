@@ -49,6 +49,9 @@ class TelegramRouter:
             "CONFIRM": self._handle_confirm_callback,
             "CANCEL": self._handle_cancel_callback,
             "PROFILE_EDIT": self._handle_profile_edit_callback,
+            "VIEW_PROFILE": self._handle_view_profile_callback,
+            "START_CHAT": self._handle_start_chat_callback,
+            "matches_back": self._handle_matches_command,
         }
     
     async def route_update(
@@ -626,43 +629,157 @@ class TelegramRouter:
             }
             
         content = "📋 **Your Connections & Requests**\n\n"
+        buttons = []
         
         if all_connections:
             content += "🤝 **Established Connections:**\n"
             for conn in all_connections:
-                content += f"• **{conn['other_name']}** (Connected)\n"
+                other_name = conn['other_name']
+                other_id = conn['other_id']
+                content += f"• **{other_name}** (Connected)\n"
+                # Add action buttons for each established connection
+                buttons.append([
+                    {"text": f"👤 Profile: {other_name}", "callback_data": f"VIEW_PROFILE:{other_id}"},
+                    {"text": f"💬 Chat: {other_name}", "callback_data": f"START_CHAT:{other_id}"}
+                ])
             content += "\n"
 
         if incoming:
             content += "📩 **Incoming Requests:**\n"
             for req in incoming:
                 from_name = req.get("from_name", "Someone")
+                from_id = req.get("from_user_id")
                 intent = req.get("intent", "match")
                 content += f"• **{from_name}** wants to connect (for: {intent})\n"
-            
-            # Show response buttons for first pending request
-            first = incoming[0]
-            from_name = first.get("from_name", "Someone")
-            return {
-                "type": "text",
-                "content": content + f"\nRespond to **{from_name}**'s request:",
-                "buttons": [
-                    [
-                        {"text": "✅ Accept", "callback_data": f"ACCEPT:{first['from_user_id']}"},
-                        {"text": "❌ Reject", "callback_data": f"REJECT:{first['from_user_id']}"}
-                    ]
-                ]
-            }
+                # Add profile view for incoming too
+                buttons.append([
+                    {"text": f"👤 View {from_name}'s Profile", "callback_data": f"VIEW_PROFILE:{from_id}"}
+                ])
+                buttons.append([
+                    {"text": f"✅ Accept {from_name}", "callback_data": f"ACCEPT:{from_id}"},
+                    {"text": f"❌ Reject {from_name}", "callback_data": f"REJECT:{from_id}"}
+                ])
             
         if outgoing:
             content += "📤 **Outgoing Requests:**\n"
             for req in outgoing:
                 to_name = req.get("to_name", "Someone")
+                to_id = req.get("to_user_id")
                 content += f"• Sent to **{to_name}** ({req['status']})\n"
+                buttons.append([
+                    {"text": f"👤 View {to_name}'s Profile", "callback_data": f"VIEW_PROFILE:{to_id}"}
+                ])
                 
         return {
             "type": "text",
-            "content": content
+            "content": content,
+            "buttons": buttons if buttons else None
+        }
+
+    async def _handle_view_profile_callback(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        param: Optional[str],
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle VIEW_PROFILE callback."""
+        if not param:
+            return {"type": "text", "content": "Error: Missing user ID."}
+            
+        try:
+            target_id = int(param)
+        except ValueError:
+            return {"type": "text", "content": "Error: Invalid user ID."}
+            
+        # Get target profile
+        profile = await self.api_client.database.get_user_profile(target_id)
+        if not profile:
+            return {"type": "text", "content": "Error: Could not find user profile."}
+            
+        # Get personality/preferences
+        personality = await self.api_client.database.get_personality_profile(target_id)
+        
+        name = profile.get("name", "N/A")
+        interests = profile.get("interests", "N/A")
+        location = profile.get("location", "N/A")
+        
+        content = f"👤 **Profile: {name}**\n\n"
+        content += f"**Interests:** {interests}\n"
+        content += f"**Location:** {location}\n"
+        
+        if personality:
+            intent = personality.get("connection_intent")
+            if intent:
+                content += f"🎯 **Looking for:** {intent}\n"
+            
+            # Show other fields if they exist
+            if "skills" in personality and personality["skills"]:
+                content += f"🛠 **Skills:** {', '.join(personality['skills']) if isinstance(personality['skills'], list) else personality['skills']}\n"
+            if "goals" in personality and personality["goals"]:
+                content += f"🚀 **Goals:** {', '.join(personality['goals']) if isinstance(personality['goals'], list) else personality['goals']}\n"
+
+        # Check connection status to provide relevant buttons
+        status = await self.api_client.database.get_connection_status(telegram_user_id, target_id)
+        
+        buttons = []
+        if status == "accepted":
+            buttons.append([{"text": f"💬 Start Chat with {name}", "callback_data": f"START_CHAT:{target_id}"}])
+        elif status == "pending":
+            # Check direction
+            incoming = await self.api_client.database.get_incoming_requests(telegram_user_id)
+            is_incoming = any(req["from_user_id"] == target_id for req in incoming)
+            if is_incoming:
+                buttons.append([
+                    {"text": "✅ Accept", "callback_data": f"ACCEPT:{target_id}"},
+                    {"text": "❌ Reject", "callback_data": f"REJECT:{target_id}"}
+                ])
+            else:
+                content += "\n(Waiting for their response...)"
+        else:
+            # Not connected or other status
+            buttons.append([{"text": "🤝 Request Connection", "callback_data": f"CONNECT:{target_id}"}])
+            
+        buttons.append([{"text": "📋 Back to Matches", "callback_data": "matches_back"}]) # We'll need to handle this back button
+
+        return {
+            "type": "text",
+            "content": content,
+            "buttons": buttons if buttons else None
+        }
+
+    async def _handle_start_chat_callback(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        param: Optional[str],
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle START_CHAT callback."""
+        if not param:
+            return {"type": "text", "content": "Error: Missing user ID."}
+            
+        try:
+            target_id = int(param)
+        except ValueError:
+            return {"type": "text", "content": "Error: Invalid user ID."}
+            
+        # Verify connection status
+        status = await self.api_client.database.get_connection_status(telegram_user_id, target_id)
+        if status != "accepted":
+            return {"type": "text", "content": "You can only chat with established connections."}
+            
+        # Get target profile for name
+        profile = await self.api_client.database.get_user_profile(target_id)
+        name = profile.get("name", "User") if profile else "User"
+        
+        # Set state to IN_CHAT
+        await self.session_manager.set_persistent_state(telegram_user_id, f"IN_CHAT:{target_id}")
+        
+        # Notify user they've entered the chat
+        return {
+            "type": "text",
+            "content": f"🔒 **Private Chat Room with {name}**\n\nYour messages will now be sent directly to {name}.\n\nType `/end` to leave the chat and return to the main menu."
         }
     
     async def _route_document(
