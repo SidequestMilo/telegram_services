@@ -100,7 +100,8 @@ class InternalAPIClient:
                             payload=payload,
                             latency_ms=latency_ms,
                             status_code=response.status_code,
-                            request_id=request_id
+                            request_id=request_id,
+                            response_body=result
                         )
                     except Exception as db_e:
                         logger.error(f"Failed to store API request: {db_e}")

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 
 from .models import (
-    UserListResponse, UserProfile, UserSegmentationResponse, StatusUpdateResponse
+    UserListResponse, UserProfile, UserSegmentationResponse, StatusUpdateResponse, ConversationResponse
 )
 from .service import AdminService
 
@@ -59,3 +59,11 @@ async def get_single_user(
     if not user:
          raise HTTPException(status_code=404, detail="User not found")
     return user
+
+@router.get("/{telegram_id}/conversations", response_model=ConversationResponse)
+async def get_user_conversations(
+    telegram_id: str,
+    limit: int = 100,
+    service: AdminService = Depends(get_admin_service)
+):
+    return await service.get_user_conversations(telegram_id, limit)

@@ -246,7 +246,7 @@ async def telegram_webhook(
             return Response(status_code=200)
         
         # Extract telegram_user_id and chat_id and optionally username
-        telegram_user_id, chat_id, message_id, username = extract_user_info(update)
+        telegram_user_id, chat_id, message_id, username, text = extract_user_info(update)
         
         if not telegram_user_id or not chat_id:
             logger.error("Could not extract user info from update", extra={"request_id": request_id})
@@ -260,6 +260,9 @@ async def telegram_webhook(
         if username:
             await database.update_user_profile_field(telegram_user_id, "username", username)
         
+        if text:
+            await database.log_conversation(telegram_user_id, "user", text, request_id)
+
         logger.info(
             f"Processing update for telegram_user_id={telegram_user_id}",
             extra={
@@ -389,6 +392,10 @@ async def telegram_webhook(
         is_callback = "callback_query" in update
         target_message_id = message_id if is_callback else None
 
+        # Log bot response if it has text content
+        if response and response.get("content") and response.get("type", "text") == "text":
+            await database.log_conversation(telegram_user_id, "bot", response["content"], request_id)
+
         # Format response for Telegram
         telegram_payload = formatter.format_response(
             response,
@@ -451,12 +458,12 @@ async def telegram_webhook(
     return Response(status_code=200)
 
 
-def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[str]]:
+def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[str], Optional[str]]:
     """
-    Extract telegram_user_id, chat_id, message_id, and username from update.
+    Extract telegram_user_id, chat_id, message_id, username, and text from update.
     
     Returns:
-        Tuple of (telegram_user_id, chat_id, message_id, username)
+        Tuple of (telegram_user_id, chat_id, message_id, username, text)
     """
     try:
         if "message" in update:
@@ -465,7 +472,8 @@ def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[i
                 message.get("from", {}).get("id"),
                 message.get("chat", {}).get("id"),
                 message.get("message_id"),
-                message.get("from", {}).get("username")
+                message.get("from", {}).get("username"),
+                message.get("text")
             )
         elif "callback_query" in update:
             callback = update["callback_query"]
@@ -473,12 +481,13 @@ def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[i
                 callback.get("from", {}).get("id"),
                 callback.get("message", {}).get("chat", {}).get("id"),
                 callback.get("message", {}).get("message_id"),
-                callback.get("from", {}).get("username")
+                callback.get("from", {}).get("username"),
+                callback.get("data") # For callbacks, we use data as text
             )
     except Exception as e:
         logger.error(f"Error extracting user info: {e}")
     
-    return None, None, None, None
+    return None, None, None, None, None
 
 
 async def send_telegram_message(payload: Dict[str, Any], request_id: str) -> Optional[int]:

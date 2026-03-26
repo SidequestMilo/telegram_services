@@ -510,3 +510,25 @@ class AdminService:
             "redis": redis_status,
             "telegram_api": tg_status
         }
+        
+    async def get_user_conversations(self, telegram_id: str, limit: int = 100) -> Dict[str, Any]:
+        """Fetch historical conversation logs for a specific user."""
+        if self.db is None: return {"conversations": [], "total": 0}
+        
+        try:
+             tel_id = int(telegram_id)
+        except ValueError:
+             tel_id = telegram_id
+             
+        cursor = self.db.conversations.find({"telegram_user_id": tel_id}).sort("timestamp", 1).limit(limit)
+        conversations = []
+        async for doc in cursor:
+            conversations.append({
+                "role": doc.get("role", "user"),
+                "content": doc.get("content", ""),
+                "timestamp": doc.get("timestamp", datetime.utcnow()),
+                "request_id": doc.get("request_id")
+            })
+            
+        total = await self.db.conversations.count_documents({"telegram_user_id": tel_id})
+        return {"conversations": conversations, "total": total}

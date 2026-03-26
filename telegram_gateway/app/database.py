@@ -228,13 +228,14 @@ class Database:
         payload: dict,
         latency_ms: float,
         status_code: int,
-        request_id: str
+        request_id: str,
+        response_body: Optional[dict] = None
     ) -> bool:
         """Store API request metrics."""
         if self.db is None:
             return False
         try:
-            await self.db.api_requests.insert_one({
+            doc = {
                 "service_name": service_name,
                 "endpoint": endpoint,
                 "payload": payload,
@@ -242,10 +243,36 @@ class Database:
                 "status_code": status_code,
                 "request_id": request_id,
                 "timestamp": datetime.utcnow()
-            })
+            }
+            if response_body:
+                doc["response"] = response_body
+            await self.db.api_requests.insert_one(doc)
             return True
         except Exception as e:
             logger.error(f"Error storing API request: {e}")
+            return False
+
+    async def log_conversation(
+        self,
+        telegram_user_id: int,
+        role: str,
+        content: str,
+        request_id: Optional[str] = None
+    ) -> bool:
+        """Log a user/bot conversation message."""
+        if self.db is None:
+            return False
+        try:
+            await self.db.conversations.insert_one({
+                "telegram_user_id": telegram_user_id,
+                "role": role,
+                "content": content,
+                "request_id": request_id,
+                "timestamp": datetime.utcnow()
+            })
+            return True
+        except Exception as e:
+            logger.error(f"Error logging conversation: {e}")
             return False
 
     async def store_match_result(

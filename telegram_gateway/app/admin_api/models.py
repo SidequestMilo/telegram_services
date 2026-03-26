@@ -99,3 +99,13 @@ class MatchTrendsResponse(BaseModel):
 class StatusUpdateResponse(BaseModel):
     status: str
     message: str
+
+class ConversationItem(BaseModel):
+    role: str
+    content: str
+    timestamp: datetime
+    request_id: Optional[str] = None
+
+class ConversationResponse(BaseModel):
+    conversations: List[ConversationItem]
+    total: int
