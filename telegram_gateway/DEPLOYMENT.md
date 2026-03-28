@@ -101,6 +101,47 @@ To deploy new code changes:
 1.  `git pull`
 2.  `docker-compose up -d --build` (Rebuilds and restarts updated services only)
 
+## 🧭 EC2 Parity Operations (Current Live Behavior)
+
+Use these scripts from this repository to reproduce the currently working EC2 setup (Docker + detached poller session) with less guesswork.
+
+### 1. Audit Current EC2 Runtime
+
+Runs read-only checks and writes a local log file with:
+- detected app path
+- compose config and container health
+- screen poller status
+- redacted `.env` keys
+- Telegram webhook info
+- recent gateway logs
+
+```powershell
+./scripts/ec2_audit.ps1 -Ec2Host 3.110.182.233 -KeyPath ./ai-microservices-key.pem
+```
+
+### 2. Deploy With Parity Defaults
+
+This flow preserves the existing `.env`, fixes data directory ownership for UID `1000`, rebuilds with `--force-recreate`, and ensures a detached `screen` poller session exists.
+
+```powershell
+./scripts/ec2_deploy_parity.ps1 -Ec2Host 3.110.182.233 -KeyPath ./ai-microservices-key.pem
+```
+
+### 3. Deploy Using Artifact Tarball (Optional)
+
+If your current process uses `deploy.tar.gz`, enable tar mode:
+
+```powershell
+./scripts/ec2_deploy_parity.ps1 -Ec2Host 3.110.182.233 -KeyPath ./ai-microservices-key.pem -UseDeployTar -DeployTarPath ./deploy.tar.gz
+```
+
+### 4. Common Flags
+
+- `-AppPath /home/ubuntu/telegram_gateway` to force app directory
+- `-SkipPrune` to avoid Docker cache prune
+- `-SkipPollerEnsure` for webhook-only deployments
+- `-Branch main` to deploy a different git branch
+
 ## ⚡️ Troubleshooting
 *   **Connection Refused**: Ensure persistent `users.db` is writable. Docker handles this with the `useradd` and `chown` steps in the Dockerfile.
 *   **Telegram 400 Errors**: Check if your Bot Token is correct and that you aren't sending malformed payloads.

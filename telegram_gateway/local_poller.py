@@ -40,7 +40,7 @@ async def main():
     print(f"📥 Polling Telegram -> Forwarding to {GATEWAY_URL}")
     print("Press Ctrl+C to stop.")
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(40.0, connect=10.0)) as client:
         # 1. Delete existing webhook to enable polling
         try:
             resp = await client.post(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
@@ -58,51 +58,51 @@ async def main():
         
         while True:
             try:
-                # Use a new client for each long-poll to avoid connection reuse issues
-                # with some ISPs/DNS when holding connections open for 30s
-                async with httpx.AsyncClient(timeout=40.0) as poll_client:
-                    try:
-                        response = await poll_client.get(
-                            f"https://api.telegram.org/bot{TOKEN}/getUpdates",
-                            params={
-                                "offset": offset,
-                                "timeout": 30,
-                                "allowed_updates": ["message", "callback_query"]
-                            }
-                        )
-                        response.raise_for_status()
-                        data = response.json()
-                        
-                        if not data.get("ok"):
-                            print(f"⚠️ Telegram API Error: {data}")
-                            await asyncio.sleep(5)
-                            continue
+                response = await client.get(
+                    f"https://api.telegram.org/bot{TOKEN}/getUpdates",
+                    params={
+                        "offset": offset,
+                        "timeout": 30,
+                        "allowed_updates": ["message", "callback_query"]
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
 
-                        updates = data.get("result", [])
-                        
-                        for update in updates:
-                            # Forward locally
-                            await forward_update(poll_client, update)
-                            # Confirm we processed it
-                            offset = update["update_id"] + 1
-                            
-                    except httpx.TimeoutException:
-                        # Timeout is normal for long polling, just continue
-                        continue
-                        
-                    except httpx.ConnectError:
-                        print("⚠️ Connection error. Retrying in 5s...")
-                        await asyncio.sleep(5)
-                        
-                    except Exception as e:
-                        print(f"⚠️ Polling error: {e}. Retrying in 2s...")
-                        await asyncio.sleep(2)
-                        
+                if not data.get("ok"):
+                    print(f"⚠️ Telegram API Error: {data}")
+                    await asyncio.sleep(5)
+                    continue
+
+                updates = data.get("result", [])
+
+                for update in updates:
+                    await forward_update(client, update)
+                    offset = update["update_id"] + 1
+
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                print(f"💥 Critical Loop Error: {e}")
+
+            except httpx.TimeoutException:
+                # Timeout is expected for long polling.
+                continue
+
+            except httpx.ConnectError as e:
+                print(f"⚠️ Connection error: {e}. Retrying in 5s...")
                 await asyncio.sleep(5)
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 409:
+                    # 409 means another getUpdates consumer exists.
+                    print("⚠️ Polling conflict (409). Retrying in 5s...")
+                    await asyncio.sleep(5)
+                else:
+                    print(f"⚠️ HTTP error: {e}. Retrying in 3s...")
+                    await asyncio.sleep(3)
+
+            except Exception as e:
+                print(f"⚠️ Polling error: {e}. Retrying in 2s...")
+                await asyncio.sleep(2)
 
 if __name__ == "__main__":
     try:
