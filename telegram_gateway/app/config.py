@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     AI_MAX_TOKENS: int = 0
     AI_TEMPERATURE: float = 1.0
     AI_TIMEOUT_SECONDS: int = 1
+    
+    # Re-engagement Configuration
+    RE_ENGAGE_HOURS: float = 36.0
 
     
     # Session Configuration

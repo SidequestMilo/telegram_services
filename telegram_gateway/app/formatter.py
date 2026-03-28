@@ -91,6 +91,27 @@ class TelegramResponseFormatter:
         return payload
     
     @staticmethod
+    def format_photo_message(
+        chat_id: int,
+        photo_id: str,
+        caption: Optional[str] = None,
+        buttons: Optional[List[List[Dict[str, str]]]] = None,
+        parse_mode: Optional[str] = "Markdown"
+    ) -> Dict[str, Any]:
+        """Format message with a photo."""
+        payload = {
+            "chat_id": chat_id,
+            "photo": photo_id
+        }
+        if caption:
+            payload["caption"] = caption
+        if buttons:
+            payload["reply_markup"] = {"inline_keyboard": buttons}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return payload
+
+    @staticmethod
     def format_edit_message(
         chat_id: int,
         message_id: int,
@@ -163,59 +184,51 @@ class TelegramResponseFormatter:
                 return self.format_text_message(chat_id, content, parse_mode=parse_mode)
             
             elif response_type == "match_list":
-                # Convert match list to inline keyboard
+                # Convert match list to multiple individual cards for better UX
                 items = response.get("items", [])
-                buttons = []
+                payloads = []
+                
+                # Intro message if no matches yet or as header
+                if items:
+                   payloads.append(self.format_text_message(chat_id, content, parse_mode=parse_mode))
                 
                 for item in items[:5]:  # Limit to 5 matches
                     name = item.get("name", "Unknown")
+                    age = item.get("age")
+                    gender = item.get("gender")
                     reason = item.get("reason", "")
                     rating = item.get("rating", 4.5)
                     match_percent = item.get("match_percentage")
-                    
-                    # Shorten reason to be more concise
-                    shortened_reason_parts = []
-                    for part in reason.split(" | "):
-                        if ": " in part:
-                            category, items_str = part.split(": ", 1)
-                            items = [i.strip() for i in items_str.split(",")]
-                            if len(items) > 3:
-                                shortened_reason_parts.append(f"{category}: {', '.join(items[:3])}, etc...")
-                            else:
-                                shortened_reason_parts.append(part)
-                        else:
-                            shortened_reason_parts.append(part)
-                            
-                    short_reason = " | ".join(shortened_reason_parts)
-                    
-                    # Add match card text
-                    if match_percent is not None:
-                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0 • {match_percent}% Match)\n{short_reason}"
-                    else:
-                        content += f"\n\n👤 **{name}** (⭐ {rating}/5.0)\n{short_reason}"
-                    
+                    photo_id = item.get("photo_id")
                     user_id = item.get("user_id", name)
                     
-                    # Add action buttons for each match side-by-side
+                    age_str = f" ({age})" if age else ""
+                    gender_str = f" | {gender}" if gender else ""
+                    
+                    match_card_text = f"👤 **{name}{age_str}**{gender_str}\n"
+                    if match_percent:
+                        match_card_text += f"⭐ {rating}/5.0 • {match_percent}% Match\n"
+                    else:
+                        match_card_text += f"⭐ {rating}/5.0\n"
+                    
+                    match_card_text += f"\n{reason}"
                     
                     # Store name in the callback payload to avoid needing a DB lookup on accept
-                    # Callback data hard limit is 64 bytes total
                     accept_payload = f"ACCEPT:{user_id}|{name}"[:64]
+                    buttons = [[
+                        {"text": "✅ Connect", "callback_data": accept_payload},
+                        {"text": "⏭ Skip", "callback_data": f"SKIP:{user_id}"}
+                    ]]
                     
-                    buttons.append([
-                        {
-                            "text": f"✅ Connect",
-                            "callback_data": accept_payload
-                        },
-                        {
-                            "text": f"⏭ Skip",
-                            "callback_data": f"SKIP:{user_id}"
-                        }
-                    ])
+                    if photo_id:
+                        payloads.append(self.format_photo_message(chat_id, photo_id, caption=match_card_text, buttons=buttons, parse_mode=parse_mode))
+                    else:
+                        payloads.append(self.format_inline_keyboard(chat_id, match_card_text, buttons, parse_mode=parse_mode))
                 
-                if message_id:
-                    return self.format_edit_message(chat_id, message_id, content, buttons, parse_mode=parse_mode)
-                return self.format_inline_keyboard(chat_id, content, buttons, parse_mode=parse_mode)
+                if not payloads:
+                    return self.format_text_message(chat_id, "No matches found right now. Try updating your preferences!", parse_mode=parse_mode)
+                
+                return payloads # Return the list of payloads
             
             elif response_type == "confirmation":
                 buttons = [

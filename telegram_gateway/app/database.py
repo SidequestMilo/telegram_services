@@ -472,3 +472,36 @@ class Database:
         except Exception as e:
             logger.error(f"Error incrementing message count: {e}")
             return 0
+
+    async def update_last_active(self, telegram_user_id: int) -> bool:
+        """Update the last activity timestamp for a user."""
+        if self.db is None:
+            return False
+        try:
+            await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$set": {"last_active_at": datetime.utcnow()}},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating last activity: {e}")
+            return False
+
+    async def get_inactive_users(self, hours: float) -> List[dict]:
+        """Fetch users who haven't been active for more than specified hours."""
+        if self.db is None:
+            return []
+        try:
+            cutoff = datetime.utcnow() - timedelta(hours=hours)
+            cursor = self.db.users.find({
+                "last_active_at": {"$lt": cutoff},
+                "is_profile_complete": True  # Only re-engage onboarded users
+            })
+            users = []
+            async for doc in cursor:
+                users.append(doc)
+            return users
+        except Exception as e:
+            logger.error(f"Error fetching inactive users: {e}")
+            return []

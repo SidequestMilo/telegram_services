@@ -52,6 +52,9 @@ class TelegramRouter:
             "VIEW_PROFILE": self._handle_view_profile_callback,
             "START_CHAT": self._handle_start_chat_callback,
             "matches_back": self._handle_matches_command,
+            "GENDER": self._handle_gender_callback,
+            "PREF_GENDER": self._handle_pref_gender_callback,
+            "PHOTO_SKIP": self._handle_photo_skip_callback,
         }
     
     async def route_update(
@@ -70,6 +73,15 @@ class TelegramRouter:
                 # Check for document upload (Resume)
                 if "document" in message:
                     return await self._route_document(
+                        message,
+                        chat_id,
+                        telegram_user_id,
+                        request_id
+                    )
+                
+                # Check for photo upload
+                if "photo" in message:
+                    return await self._route_photo(
                         message,
                         chat_id,
                         telegram_user_id,
@@ -239,14 +251,48 @@ class TelegramRouter:
         if state == "AWAITING_PROFILE_NAME":
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "name", text)
-            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_INTERESTS")
-            return {"type": "text", "content": "Nice to meet you! Now, tell us about your **Interests** (e.g., Python, entrepreneurship, baking):"}
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_AGE")
+            return {"type": "text", "content": "Nice to meet you! **(Step 2/8)**\n\nHow old are you?"}
+
+        if state == "AWAITING_PROFILE_AGE":
+            # Validation for age
+            try:
+                age_val = int(text)
+                if age_val < 13 or age_val > 120:
+                    return {"type": "text", "content": "Please enter a realistic age (between 13 and 120)."}
+            except ValueError:
+                return {"type": "text", "content": "Please enter a valid number for your age."}
+                
+            if getattr(self.api_client, "database", None):
+                await self.api_client.database.update_user_profile_field(telegram_user_id, "age", str(age_val))
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_GENDER")
+            return {
+                "type": "text",
+                "content": "Got it! **(Step 3/8)**\n\nWhat is your **Gender**?",
+                "buttons": [
+                    [{"text": "Male", "callback_data": "GENDER:Male"}, {"text": "Female", "callback_data": "GENDER:Female"}],
+                    [{"text": "Non-binary", "callback_data": "GENDER:Non-binary"}, {"text": "Prefer not to say", "callback_data": "GENDER:Other"}]
+                ]
+            }
+
+        if state == "AWAITING_PROFILE_GENDER":
+            if getattr(self.api_client, "database", None):
+                await self.api_client.database.update_user_profile_field(telegram_user_id, "gender", text)
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PREFERENCE_GENDER")
+            return {
+                "type": "text",
+                "content": "Got it! **(Step 4/8)**\n\nWho are you looking to meet? (Gender preference)",
+                "buttons": [
+                    [{"text": "Men", "callback_data": "PREF_GENDER:Male"}, {"text": "Women", "callback_data": "PREF_GENDER:Female"}],
+                    [{"text": "Everyone", "callback_data": "PREF_GENDER:Everyone"}]
+                ]
+            }
 
         if state == "AWAITING_PROFILE_INTERESTS":
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "interests", text)
             await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_LOCATION")
-            return {"type": "text", "content": "Got it! Now, what is your **Location** (e.g., USA, India, UK)?"}
+            return {"type": "text", "content": "Got it! **(Step 6/8)**\n\nWhat is your **Location** (e.g., USA, India, UK)?"}
 
         if state == "AWAITING_PROFILE_LOCATION":
             # Guardrails for location: must be at least 2 chars and contain letters
@@ -263,21 +309,33 @@ class TelegramRouter:
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "location", text)
                 
             await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_REGION")
-            return {"type": "text", "content": "Great! Finally, what is your **Region**? (e.g., California, Maharashtra, London):"}
+            return {"type": "text", "content": "Great! **(Step 7/8)**\n\nFinally, what is your **Region**? (e.g., California, Maharashtra, London):"}
 
         if state == "AWAITING_PROFILE_REGION":
             if getattr(self.api_client, "database", None):
                 await self.api_client.database.update_user_profile_field(telegram_user_id, "region", text)
-                await self.api_client.database.set_onboarding_status(telegram_user_id, True)
-            await self.session_manager.set_persistent_state(telegram_user_id, None)
+            
+            await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_PHOTO")
             return {
                 "type": "text",
-                "content": "✨ **Profile complete!**\n\nNow you can use 'Find Matches' to see who's around! 🚀",
-                "keyboard": [
-                    [{"text": "My Profile"}],
-                    [{"text": "Find Matches"}, {"text": "View Matches"}]
-                ]
+                "content": "Almost done! **(Step 7/7)**\n\nLastly, upload a profile photo! This will be shown to your matches. 📸\n\nAlternatively, type `/skip` to finish.",
+                "buttons": [[{"text": "⏩ Skip Step", "callback_data": "PHOTO_SKIP"}]]
             }
+
+        if state == "AWAITING_PROFILE_PHOTO":
+             # We handle photo in _route_photo if available
+             if text == "/skip":
+                 await self.api_client.database.set_onboarding_status(telegram_user_id, True)
+                 await self.session_manager.set_persistent_state(telegram_user_id, None)
+                 return {
+                    "type": "text",
+                    "content": "✨ **Profile complete!**\n\nNow you can use 'Find Matches' to see who's around! 🚀",
+                    "keyboard": [
+                        [{"text": "My Profile"}],
+                        [{"text": "Find Matches"}, {"text": "View Matches"}]
+                    ]
+                 }
+             return {"type": "text", "content": "Please send a photo or type `/skip` to finish profile setup."}
             
         if state == "AWAITING_INTENT_INPUT":
             # Clear state
@@ -515,15 +573,17 @@ class TelegramRouter:
         profile = await self.api_client.database.get_user_profile(telegram_user_id)
         if not profile or not profile.get("name"):
             await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_NAME")
-            return {"type": "text", "content": "You don't have a profile yet! Let's start.\n\nWhat is your **Name**?"}
+            return {"type": "text", "content": "You don't have a profile yet! Let's start. **(Step 1/8)**\n\nWhat is your **Name**?"}
             
         # Build Profile Card
         name = profile.get("name", "N/A")
+        age = profile.get("age", "N/A")
+        gender = profile.get("gender", "N/A")
         interests = profile.get("interests", "N/A")
         location = profile.get("location", "N/A")
         region = profile.get("region", "N/A")
         
-        content = f"👤 **Your Profile**\n\n**Name:** {name}\n**Interests:** {interests}\n**Location:** {location}\n**Region:** {region}\n"
+        content = f"👤 **Your Profile**\n\n**Name:** {name}\n**Age:** {age}\n**Gender:** {gender}\n**Interests:** {interests}\n**Location:** {location}\n**Region:** {region}\n"
         
         # Add personality summary if available
         personality = await self.api_client.database.get_personality_profile(telegram_user_id)
@@ -835,6 +895,88 @@ class TelegramRouter:
     
     # Callback Query Handlers
     
+    async def _handle_pref_gender_callback(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        param: Optional[str],
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle GENDER PREFERENCE selection callback."""
+        if getattr(self.api_client, "database", None):
+            await self.api_client.database.update_user_preferences(telegram_user_id, {"looking_for_gender": param or "Everyone"})
+        
+        await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_INTERESTS")
+        return {"type": "text", "content": "Got it! **(Step 5/8)**\n\nNow, tell us about your **Interests** (e.g., Python, entrepreneurship, baking):"}
+
+    async def _handle_gender_callback(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        param: Optional[str],
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle GENDER selection callback."""
+        if getattr(self.api_client, "database", None):
+            await self.api_client.database.update_user_profile_field(telegram_user_id, "gender", param or "Other")
+        
+        await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_INTERESTS")
+        return {"type": "text", "content": "Got it! **(Step 4/7)**\n\nNow, tell us about your **Interests** (e.g., Python, entrepreneurship, baking):"}
+
+    async def _handle_photo_skip_callback(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        param: Optional[str],
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle PHOTO_SKIP callback."""
+        await self.api_client.database.set_onboarding_status(telegram_user_id, True)
+        await self.session_manager.set_persistent_state(telegram_user_id, None)
+        return {
+            "type": "text",
+            "content": "✨ **Profile complete!**\n\nNow you can use 'Find Matches' to see who's around! 🚀",
+            "keyboard": [
+                [{"text": "My Profile"}],
+                [{"text": "Find Matches"}, {"text": "View Matches"}]
+            ]
+        }
+
+    async def _route_photo(
+        self,
+        message: Dict[str, Any],
+        chat_id: str,
+        telegram_user_id: int,
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Route photo uploads."""
+        # Check if user is in photo state
+        state = await self.session_manager.get_persistent_state(telegram_user_id)
+        if state != "AWAITING_PROFILE_PHOTO":
+            # Just log and move on if not in state
+            return None
+            
+        # Extract file_id from the largest photo
+        photos = message.get("photo", [])
+        if not photos:
+            return None
+            
+        photo_id = photos[-1]["file_id"]
+        
+        if getattr(self.api_client, "database", None):
+            await self.api_client.database.update_user_profile_field(telegram_user_id, "photo_id", photo_id)
+            await self.api_client.database.set_onboarding_status(telegram_user_id, True)
+            
+        await self.session_manager.set_persistent_state(telegram_user_id, None)
+        return {
+            "type": "text",
+            "content": "📸 **Photo saved! Profile complete!** ✨\n\nNow you can use 'Find Matches' to see who's around! 🚀",
+            "keyboard": [
+                [{"text": "My Profile"}],
+                [{"text": "Find Matches"}, {"text": "View Matches"}]
+            ]
+        }
+
     async def _handle_connect_callback(
         self,
         chat_id: str,
@@ -847,7 +989,7 @@ class TelegramRouter:
             chat_id,
             telegram_user_id,
             "CONNECT",
-            None,
+            param,
             request_id
         )
     

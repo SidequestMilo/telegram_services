@@ -309,6 +309,20 @@ class InternalAPIClient:
         Returns:
             Interpretation result
         """
+        # New requirement: Extract gender preference from message text (e.g. "female hiking partner")
+        lower_text = message_text.lower()
+        extracted_gender = None
+        if any(w in lower_text for w in ["female", "woman", "women", "girl", "girls", "lady"]):
+            extracted_gender = "Female"
+        elif any(w in lower_text for w in ["male", "man", "men", "boy", "boys", "guy", "guys"]):
+            extracted_gender = "Male"
+        elif any(w in lower_text for w in ["everyone", "anyone", "anybody", "any preference", "both"]):
+            extracted_gender = "Everyone"
+            
+        if extracted_gender and self.database:
+            logger.info(f"Detected gender preference '{extracted_gender}' in message: '{message_text}'")
+            await self.database.update_user_preferences(telegram_user_id, {"looking_for_gender": extracted_gender})
+
         payload = {
             "chat_id": chat_id,
             "user_id": str(telegram_user_id),
@@ -609,9 +623,42 @@ class InternalAPIClient:
                         if str(match_user) in excluded_ids:
                              continue
 
+                        # Fetch real profile details from DB
+                        uid = None
+                        try:
+                            uid = int(str(match_user).replace("user_", ""))
+                        except (ValueError, TypeError):
+                            pass
+                            
+                        photo_id = None
+                        age = None
+                        gender = None
+                        
+                        if self.database and uid:
+                            db_profile = await self.database.get_user_profile(uid)
+                            if db_profile:
+                                if not display_name or display_name == match_user or display_name == "Unknown":
+                                    display_name = db_profile.get("name") or display_name
+                                photo_id = db_profile.get("photo_id")
+                                age = db_profile.get("age")
+                                gender = db_profile.get("gender")
+                        
+                        # Apply gender filter in gateway if preference exists
+                        # (Only if we have the gender data for the match)
+                        current_preferences = await self.database.get_user_preferences(telegram_user_id) if self.database else {}
+                        pref_gender = current_preferences.get("looking_for_gender") if current_preferences else None
+                        
+                        if pref_gender and pref_gender != "Everyone" and gender:
+                            if gender != pref_gender:
+                                logger.info(f"Filtering out match {match_user} due to gender preference ({pref_gender})")
+                                continue
+
                         candidates.append({
                             "user_id": match_user,
                             "name": display_name,
+                            "age": age,
+                            "gender": gender,
+                            "photo_id": photo_id,
                             "reason": reason_str,
                             "rating": round(score * 5.0, 1) if score else 5.0,
                             "match_percentage": round(score * 100) if score else 100

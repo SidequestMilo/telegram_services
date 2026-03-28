@@ -21,6 +21,8 @@ from .api_client import InternalAPIClient
 from .router import TelegramRouter
 from .formatter import TelegramResponseFormatter
 from .admin_api.router import router as admin_router, broadcast_router
+from .cron import start_cron_scheduler
+import asyncio
 
 # Configure logging
 def setup_logging(settings: Settings):
@@ -102,6 +104,20 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error setting Telegram commands: {e}")
     
     logger.info("All services initialized successfully")
+    
+    # Start re-engagement cron job (36-hour inactivity check)
+    # Note: Using a wrapper to avoid circular dependencies or closure issues
+    async def _send_re_engage(payload, req_id):
+        try:
+            # Re-use global objects
+            return await send_telegram_message(payload, req_id)
+        except Exception as e:
+            logger.error(f"Re-engage send error: {e}")
+            return None
+
+    asyncio.create_task(
+        start_cron_scheduler(database, settings, _send_re_engage)
+    )
     
     yield
     
@@ -251,6 +267,9 @@ async def telegram_webhook(
         if not telegram_user_id or not chat_id:
             logger.error("Could not extract user info from update", extra={"request_id": request_id})
             return Response(status_code=200)
+            
+        # Update last activity for every user update
+        await database.update_last_active(telegram_user_id)
             
         # Store user message ID for history tracking
         if message_id:
@@ -490,22 +509,31 @@ def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[i
     return None, None, None, None, None
 
 
-async def send_telegram_message(payload: Dict[str, Any], request_id: str) -> Optional[int]:
+async def send_telegram_message(payload: Any, request_id: str) -> Optional[int]:
     """
-    Send message to Telegram API with retry logic.
-    
-    Args:
-        payload: Telegram API payload
-        request_id: Request ID for logging
+    Send formatted payload to Telegram API.
+    Handles single Dict payloads, lists of payloads, and photo messages.
+    """
+    if isinstance(payload, list):
+        last_id = None
+        # Process multi-payloads (e.g. match cards)
+        for p in payload:
+            last_id = await send_telegram_message(p, request_id)
+        return last_id
         
-    Returns:
-        Message ID of the sent/edited message, or None if failed
-    """
+    if not isinstance(payload, dict):
+        return None
+
     # Determine endpoint based on payload
-    if "message_id" in payload:
+    if "photo" in payload:
+        endpoint = "/sendPhoto"
+    elif "message_id" in payload:
         endpoint = "/editMessageText"
     else:
         endpoint = "/sendMessage"
+    
+    # Extract chat_id for logging bot responses to our DB
+    chat_id = payload.get("chat_id")
     
     for attempt in range(2):  # Try twice
         try:
@@ -518,20 +546,18 @@ async def send_telegram_message(payload: Dict[str, Any], request_id: str) -> Opt
             response.raise_for_status()
             result = response.json()
             
+            # Log bot response to our conversations table
+            if chat_id:
+                bot_text = payload.get("text") or payload.get("caption") or "[Photo Message]"
+                await database.log_conversation(chat_id, "bot", bot_text, request_id)
+
             logger.info(
                 f"Telegram message sent successfully via {endpoint}",
                 extra={"request_id": request_id, "attempt": attempt + 1}
             )
             
             # Extract message_id
-            if endpoint == "/sendMessage":
-                return result.get("result", {}).get("message_id")
-            elif endpoint == "/editMessageText":
-                 # For edit, return the original message_id or the new one if different
-                 # Usually result is the Message object
-                 return result.get("result", {}).get("message_id")
-            
-            return None
+            return result.get("result", {}).get("message_id")
             
         except httpx.HTTPStatusError as e:
             logger.error(
@@ -541,19 +567,16 @@ async def send_telegram_message(payload: Dict[str, Any], request_id: str) -> Opt
             
             # If the error is just that the message hasn't changed, ignore it gracefully
             if e.response.status_code == 400 and "message is not modified" in e.response.text.lower():
-                logger.info("Ignoring 'message is not modified' error from Telegram API.")
                 return payload.get("message_id")
                 
-            if attempt == 1:  # Last attempt
-                raise
+            if attempt == 1: raise
                 
         except Exception as e:
             logger.error(
                 f"Failed to send Telegram message (attempt {attempt + 1}): {e}",
                 extra={"request_id": request_id}
             )
-            if attempt == 1:
-                raise
+            if attempt == 1: raise
     return None
 
 
