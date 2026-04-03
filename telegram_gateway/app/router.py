@@ -2,6 +2,7 @@
 Table-driven routing for Telegram updates.
 """
 import logging
+import asyncio
 from typing import Dict, Any, Optional, Callable, Awaitable, TYPE_CHECKING
 from enum import Enum
 
