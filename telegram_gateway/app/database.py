@@ -3,7 +3,7 @@ Persistent database for user mappings using MongoDB (Motor).
 """
 import logging
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 
 logger = logging.getLogger(__name__)
@@ -94,14 +94,16 @@ class Database:
             return None
 
     async def update_user_preferences(self, telegram_user_id: int, preferences: dict) -> bool:
-        """Update user connection preferences."""
+        """Update user connection preferences (merges new keys)."""
         if self.db is None: return False
         try:
-            # We merge the new preferences with the old ones if desired, or just overwrite.
-            # Here we just overwrite for simplicity.
+            # Use $set with dotted notation to avoid overwriting the entire preferences object
+            update_data = {f"preferences.{k}": v for k, v in preferences.items()}
+            update_data["telegram_user_id"] = telegram_user_id
+            
             await self.db.users.update_one(
                 {"telegram_user_id": telegram_user_id},
-                {"$set": {"preferences": preferences, "telegram_user_id": telegram_user_id}},
+                {"$set": update_data},
                 upsert=True
             )
             return True
@@ -496,7 +498,8 @@ class Database:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
             cursor = self.db.users.find({
                 "last_active_at": {"$lt": cutoff},
-                "is_profile_complete": True  # Only re-engage onboarded users
+                "is_profile_complete": True,  # Only re-engage onboarded users
+                "is_blocked": {"$ne": True}    # Skip blocked users
             })
             users = []
             async for doc in cursor:
@@ -505,3 +508,16 @@ class Database:
         except Exception as e:
             logger.error(f"Error fetching inactive users: {e}")
             return []
+
+    async def mark_user_blocked(self, telegram_user_id: int) -> bool:
+        """Mark a user as having blocked the bot."""
+        if self.db is None: return False
+        try:
+            await self.db.users.update_one(
+                {"telegram_user_id": telegram_user_id},
+                {"$set": {"is_blocked": True, "blocked_at": datetime.utcnow()}}
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error marking user {telegram_user_id} as blocked: {e}")
+            return False

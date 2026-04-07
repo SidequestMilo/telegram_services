@@ -87,12 +87,11 @@ async def lifespan(app: FastAPI):
     try:
         commands_payload = {
             "commands": [
+                {"command": "start", "description": "Start fresh with Milo"},
                 {"command": "profile", "description": "View and update your profile details"},
-                {"command": "connect", "description": "Find or request new matches"},
-                {"command": "new", "description": "Add new connection preferences"},
-                {"command": "matches", "description": "View your current match suggestions"},
-                {"command": "clear", "description": "Clear your conversation history"},
-                {"command": "help", "description": "See all available bot commands"}
+                {"command": "connect", "description": "Set or update your matching goals"},
+                {"command": "matches", "description": "Find and discover new matches"},
+                {"command": "clear", "description": "Clear your conversation history"}
             ]
         }
         response = await telegram_http_client.post("/setMyCommands", json=commands_payload, timeout=5.0)
@@ -109,8 +108,13 @@ async def lifespan(app: FastAPI):
     # Note: Using a wrapper to avoid circular dependencies or closure issues
     async def _send_re_engage(payload, req_id):
         try:
-            # Re-use global objects
             return await send_telegram_message(payload, req_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in [400, 403]:
+                # 403: Forbidden (blocked), 400: Bad Request (sometimes means blocked)
+                logger.warning(f"User {payload.get('chat_id')} might have blocked the bot: {e.response.status_code}")
+                return "BLOCKED"
+            return None
         except Exception as e:
             logger.error(f"Re-engage send error: {e}")
             return None
@@ -568,8 +572,13 @@ async def send_telegram_message(payload: Any, request_id: str) -> Optional[int]:
             # If the error is just that the message hasn't changed, ignore it gracefully
             if e.response.status_code == 400 and "message is not modified" in e.response.text.lower():
                 return payload.get("message_id")
+            
+            # If the user blocked the bot, we might want to know
+            if e.response.status_code in [400, 403]:
+                # We still raise if it's the last attempt, but we could return special signal
+                pass
                 
-            if attempt == 1: raise
+            if attempt == 1: raise e
                 
         except Exception as e:
             logger.error(

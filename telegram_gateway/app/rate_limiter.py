@@ -33,8 +33,8 @@ class RateLimiter:
             )
             await self.redis_client.ping()
             logger.info("Rate limiter Redis connection established")
-        except RedisError as e:
-            logger.error(f"Failed to connect to Redis for rate limiting: {e}")
+        except RedisError:
+            logger.info("Rate limiter is disabled (Redis not available).")
             self.redis_client = None
     
     async def disconnect(self):
@@ -58,7 +58,7 @@ class RateLimiter:
             True if rate limited, False otherwise
         """
         if not self.redis_client:
-            logger.warning("Redis not available, rate limiting disabled")
+            # Redis is optional; fail open quietly
             return False
         
         try:

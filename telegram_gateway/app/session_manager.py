@@ -44,8 +44,8 @@ class SessionManager:
             )
             await self.redis_client.ping()
             logger.info("Redis connection established successfully")
-        except RedisError as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+        except RedisError:
+            logger.info("Redis is unavailable; bot will use Database (MongoDB) only for session storage.")
             self.redis_client = None
     
     async def disconnect(self):
@@ -87,7 +87,6 @@ class SessionManager:
                 # Continue to DB fallback
 
         # 2. Fallback to Persistent DB
-        logger.info(f"Checking DB for telegram_user_id={telegram_user_id}")
         chat_id = await self.database.get_chat_id(telegram_user_id)
         
         if chat_id:

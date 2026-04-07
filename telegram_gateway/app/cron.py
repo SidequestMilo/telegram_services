@@ -30,9 +30,12 @@ async def re_engage_inactive_users(db: Database, settings: Settings, send_messag
             }
             
             # Send the message
-            success = await send_message_func(message, "cron-re-engage")
+            result = await send_message_func(message, "cron-re-engage")
             
-            if success:
+            if result == "BLOCKED":
+                logger.warning(f"User {telegram_user_id} has blocked the bot. Marking as unreachable.")
+                await db.mark_user_blocked(telegram_user_id)
+            elif result:
                 logger.info(f"Successfully re-engaged user {telegram_user_id}")
                 # Update last_active so we don't spam them every cron run
                 await db.update_last_active(telegram_user_id)

@@ -4,6 +4,7 @@ Internal API client for downstream service communication.
 import logging
 from typing import Dict, Any, Optional
 from uuid import uuid4
+import time
 
 import httpx
 
@@ -455,17 +456,18 @@ class InternalAPIClient:
         logger.info(f"[MOCK] Calling user profile service for command {command}")
         
         if command == "/start":
+            content = (
+                "Hey, I’m Milo ☕️\n\n"
+                "I’m here to help you find people you’ll actually click with through shared interests, intentions, and real-life events.\n\n"
+                "Think: gym buddy, study buddy, event buddy, hobby friend - whatever fits where you’re at right now.\n\n"
+                "I’ll get to know you a little first so I can suggest the right people, communities, and events for you.\n\n"
+                "Your profile stays private - nothing is shown publicly.\n\n"
+                "Join our announcement channel to keep in touch with the changes we bring to Milo - \n\n"
+                "First, let’s build your profile. Hit /profile command to set up your profile"
+            )
             return {
                 "type": "text",
-                "content": "👋 Hi, i’m Milo - I match you to whoever you want - Is there someone you would like to meet?\n\n"
-                          "Available Commands:\n"
-                          "/profile - View and update your profile details\n"
-                          "/connect - Find or request new matches\n"
-                          "/new - Add new connection preferences\n"
-                          "/matches - View your current match suggestions\n"
-                          "/clear - Clear your conversation history\n"
-                          "/help - See all available bot commands\n\n"
-                          "Use /profile command to set up your profile",
+                "content": content,
                 "internal_user_id": f"user_{telegram_user_id}",
                 "new_user": True
             }
