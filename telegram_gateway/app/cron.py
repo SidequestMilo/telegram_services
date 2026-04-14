@@ -45,11 +45,37 @@ async def re_engage_inactive_users(db: Database, settings: Settings, send_messag
     except Exception as e:
         logger.error(f"Error in re-engagement cron job: {e}")
 
-async def start_cron_scheduler(db: Database, settings: Settings, send_message_func):
+async def start_cron_scheduler(db: Database, settings: Settings, send_message_func, session_manager=None):
     """
     Run the cron scheduler every hour.
     """
     while True:
-        await re_engage_inactive_users(db, settings, send_message_func)
+        # Check if we should run now
+        # We use a distributed lock to ensure only one worker runs this at a time
+        lock_key = "cron:re_engage:lock"
+        lock_acquired = False
+        
+        if session_manager and getattr(session_manager, "redis_client", None):
+            try:
+                # Try to acquire lock for 55 minutes (slightly less than the 60 min loop)
+                # This ensures if the worker dies, the lock eventually expires
+                lock_acquired = await session_manager.redis_client.set(
+                    lock_key, "1", ex=3300, nx=True
+                )
+            except Exception as e:
+                logger.error(f"Error checking redis lock: {e}")
+                # Fallback to true to avoid skipping if redis is flaky
+                lock_acquired = True
+        else:
+            # No redis or session manager, default to running
+            # (Note: In multi-worker env without redis, this might still cause duplicates)
+            lock_acquired = True
+            
+        if lock_acquired:
+            logger.info("Cron lock acquired, running re-engagement task")
+            await re_engage_inactive_users(db, settings, send_message_func)
+        else:
+            logger.debug("Cron lock already held by another worker, skipping this run")
+
         # Sleep for 1 hour before checking again
         await asyncio.sleep(3600)

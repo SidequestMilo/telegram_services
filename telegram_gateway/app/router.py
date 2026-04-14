@@ -1019,7 +1019,12 @@ class TelegramRouter:
     ) -> Optional[Dict[str, Any]]:
         """Handle GENDER selection callback."""
         if getattr(self.api_client, "database", None):
-            await self.api_client.database.update_user_profile_field(telegram_user_id, "gender", param or "Other")
+            gender = param or "Other"
+            await self.api_client.database.update_user_profile_field(telegram_user_id, "gender", gender)
+            
+            # Default preference for Female users: look for other Females first
+            if gender == "Female":
+                await self.api_client.database.update_user_preferences(telegram_user_id, {"looking_for_gender": "Female"})
         
         await self.session_manager.set_persistent_state(telegram_user_id, "AWAITING_PROFILE_INTERESTS")
         return {
@@ -1119,12 +1124,20 @@ class TelegramRouter:
         rejecter_profile = await self.api_client.database.get_user_profile(telegram_user_id)
         rejecter_name = rejecter_profile.get("name", "Someone")
         
+        # Send a connection denied notification to the requester
         await self.api_client.send_direct_message(
             target_id,
-            f"Milo: Sorry, **{rejecter_name}** has declined your connection request for now. Don't worry, there are plenty of other people to connect with! 🚀"
+            f"🚫 **Connection Denied**\n\nSorry, **{rejecter_name}** has declined your connection request for now. Don't worry, there are plenty of other people to connect with! 🚀"
         )
         
-        return {"type": "text", "content": "❌ Request declined."}
+        # Also notify the notification service
+        await self.api_client.call_notification(
+            str(target_id),
+            "connection_denied",
+            request_id
+        )
+        
+        return {"type": "text", "content": "❌ **Connection Denied**\n\nRequest declined successfully."}
     
     async def _handle_skip_callback(
         self,

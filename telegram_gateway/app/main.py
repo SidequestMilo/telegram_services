@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI):
             return None
 
     asyncio.create_task(
-        start_cron_scheduler(database, settings, _send_re_engage)
+        start_cron_scheduler(database, settings, _send_re_engage, session_manager)
     )
     
     yield

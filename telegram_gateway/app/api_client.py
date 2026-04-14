@@ -667,6 +667,15 @@ class InternalAPIClient:
                         })
                     
                     if candidates:
+                        # Prioritize same-gender matches for Female users
+                        user_profile = await self.database.get_user_profile(telegram_user_id) if self.database else {}
+                        user_gender = user_profile.get("gender") if user_profile else None
+                        
+                        if user_gender == "Female":
+                            # Stable sort: Females first (False=0 comes before True=1)
+                            candidates.sort(key=lambda x: x.get("gender") != "Female")
+                            logger.info(f"Prioritized female matches for female user {telegram_user_id}")
+
                         candidate = candidates[0]  # Update fallback just in case
                         
                     if self.database:
