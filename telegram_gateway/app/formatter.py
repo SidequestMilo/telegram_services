@@ -218,10 +218,10 @@ class TelegramResponseFormatter:
                     
                     match_card_text += f"\n{reason}"
                     
-                    # Store name in the callback payload to avoid needing a DB lookup on accept
-                    accept_payload = f"ACCEPT:{user_id}|{name}"[:64]
+                    # Store name in the callback payload to avoid needing a DB lookup on request
+                    request_payload = f"REQUEST:{user_id}|{name}"[:64]
                     buttons = [[
-                        {"text": "✅ Connect", "callback_data": accept_payload},
+                        {"text": "✅ Connect", "callback_data": request_payload},
                         {"text": "⏭ Skip", "callback_data": f"SKIP:{user_id}"}
                     ]]
                     

@@ -56,6 +56,7 @@ class TelegramRouter:
             "GENDER": self._handle_gender_callback,
             "INTENT": self._handle_intent_callback,
             "LOCATION": self._handle_location_callback,
+            "REQUEST": self._handle_request_callback,
         }
     
     async def route_update(
@@ -1078,9 +1079,9 @@ class TelegramRouter:
         param: Optional[str],
         request_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Handle ACCEPT callback."""
+        """Handle ACCEPT callback (Person B approves Person A's request)."""
         if not param: return None
-        # Extract target user_id (the requester)
+        # Extract target user_id (the requester, Person A)
         try:
             target_id = int(param.split('|')[0])
         except (ValueError, IndexError):
@@ -1090,19 +1091,35 @@ class TelegramRouter:
         if not success:
             return {"type": "text", "content": "Failed to update match status."}
             
-        # Notify requester
-        user = await self.api_client.database.get_user_profile(telegram_user_id)
-        name = user.get("name", "Someone") if user else "Someone"
+        # Get profiles to build links
+        approver_profile = await self.api_client.database.get_user_profile(telegram_user_id)
+        requester_profile = await self.api_client.database.get_user_profile(target_id)
+        
+        approver_name = approver_profile.get("name", "Someone") if approver_profile else "Someone"
+        approver_username = approver_profile.get("username") if approver_profile else None
+        
+        requester_name = requester_profile.get("name", "Someone") if requester_profile else "Someone"
+        requester_username = requester_profile.get("username") if requester_profile else None
+        
+        # Build direct chat links
+        approver_url = f"https://t.me/{approver_username}" if approver_username else f"tg://user?id={telegram_user_id}"
+        requester_url = f"https://t.me/{requester_username}" if requester_username else f"tg://user?id={target_id}"
+
+        # 1. Notify Requester (Person A)
+        a_message = f"🎉 **Match Approved!**\n\n**{approver_name}** has accepted your connection request! 🚀\n\nYou can now message them directly using the button below:"
+        a_markup = {"inline_keyboard": [[{"text": f"📩 Message {approver_name}", "url": approver_url}]]}
         
         try:
-            await self.api_client.send_direct_message(
-                target_id,
-                f"🎉 **Match Accepted!**\n\nYou are now connected with **{name}**!"
-            )
-        except Exception:
-            pass # Non-critical if notification fails
+            await self.api_client.send_direct_message(target_id, a_message, reply_markup=a_markup)
+        except Exception as e:
+            logger.error(f"Failed to notify requester {target_id}: {e}")
             
-        return {"type": "text", "content": f"✅ Match accepted! You are now connected with the requester."}
+        # 2. Return response to Approver (Person B)
+        return {
+            "type": "text", 
+            "content": f"✅ **Matched!**\n\nYou are now connected with **{requester_name}**!\n\nYou can also start a chat with them here:",
+            "buttons": [[{"text": f"📩 Message {requester_name}", "url": requester_url}]]
+        }
     
     async def _handle_reject_callback(
         self,
@@ -1137,7 +1154,52 @@ class TelegramRouter:
             request_id
         )
         
-        return {"type": "text", "content": "❌ **Connection Denied**\n\nRequest declined successfully."}
+        return {"type": "text", "content": "❌ **Connection Declined**\n\nRequest declined successfully."}
+    
+    async def _handle_request_callback(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        param: Optional[str],
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle REQUEST callback (Person A requests Person B)."""
+        if not param: return None
+        # param is "target_user_id|target_name"
+        parts = param.split('|')
+        try:
+            target_id = int(parts[0])
+            target_name = parts[1] if len(parts) > 1 else "Someone"
+        except (ValueError, IndexError):
+            return {"type": "text", "content": "Error: Invalid request target."}
+
+        # 1. Record the pending connection request in the database
+        # from_user_id=A (telegram_user_id), to_user_id=B (target_id)
+        await self.api_client.database.record_connection(telegram_user_id, target_id, "pending")
+        
+        # 2. Notify the target (Person B)
+        requester_profile = await self.api_client.database.get_user_profile(telegram_user_id)
+        requester_name = requester_profile.get("name", "Someone") if requester_profile else "Someone"
+        
+        # Build the approval message for B
+        b_message = f"🔔 **New Connection Request!**\n\n**{requester_name}** wants to connect with you. Would you like to accept?"
+        b_markup = {
+            "inline_keyboard": [[
+                {"text": "✅ Approve", "callback_data": f"ACCEPT:{telegram_user_id}|{requester_name}"},
+                {"text": "❌ Reject", "callback_data": f"REJECT:{telegram_user_id}|{requester_name}"}
+            ]]
+        }
+        
+        try:
+            await self.api_client.send_direct_message(target_id, b_message, reply_markup=b_markup)
+        except Exception as e:
+            logger.error(f"Failed to notify target {target_id} of request from {telegram_user_id}: {e}")
+
+        # 3. Inform the requester (Person A)
+        return {
+            "type": "text",
+            "content": f"📤 **Request Sent!**\n\nI've sent your request to **{target_name}**. You'll be notified if they approve! 🚀"
+        }
     
     async def _handle_skip_callback(
         self,
