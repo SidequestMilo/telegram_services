@@ -50,10 +50,10 @@ class Settings(BaseSettings):
     NOTIFICATION_SERVICE_URL: str = "http://localhost:8004"
     
     # Timeout Configuration (in seconds)
-    CONVERSATION_TIMEOUT: int = 5
-    MATCHING_TIMEOUT: int = 3
-    NOTIFICATION_TIMEOUT: int = 3
-    USER_PROFILE_TIMEOUT: int = 3
+    CONVERSATION_TIMEOUT: int = 60
+    MATCHING_TIMEOUT: int = 15
+    NOTIFICATION_TIMEOUT: int = 15
+    USER_PROFILE_TIMEOUT: int = 15
     
     # Logging Configuration
     LOG_LEVEL: str = "INFO"
