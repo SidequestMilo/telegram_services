@@ -166,6 +166,11 @@ class TelegramResponseFormatter:
         response_type = response.get("type", "text")
         content = response.get("content", "No response")
         
+        # Ensure content is never empty as Telegram forbids empty messages
+        if not content or str(content).strip() == "":
+            content = "Sorry, I couldn't generate a response. Please try again."
+
+        
         try:
             parse_mode = response.get("parse_mode", "Markdown")
             
