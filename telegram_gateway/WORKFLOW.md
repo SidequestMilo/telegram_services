@@ -17,7 +17,7 @@ This document outlines how the Telegram Gateway processes different types of use
         ```json
         {
           "chat_id": "5db9df90-2677-43b8-9457-4fd162bf7616",
-          "model_id": "mistral-small-latest",
+          "model_id": "gemini-2.5-flash",
           "message": "Hello AI",
           "max_tokens": 1024,
           "temperature": 0.7,

@@ -27,10 +27,10 @@ class Settings(BaseSettings):
     MONGO_DB_NAME: str = "telegram_gateway"
     
     # AI Model Configuration
-    AI_MODEL_ID: str = "string"
-    AI_MAX_TOKENS: int = 0
-    AI_TEMPERATURE: float = 1.0
-    AI_TIMEOUT_SECONDS: int = 1
+    AI_MODEL_ID: str = "gemini-2.5-flash"
+    AI_MAX_TOKENS: int = 1024
+    AI_TEMPERATURE: float = 0.7
+    AI_TIMEOUT_SECONDS: int = 30
     
     # Re-engagement Configuration
     RE_ENGAGE_HOURS: float = 36.0
