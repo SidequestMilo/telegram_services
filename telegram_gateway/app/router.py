@@ -57,6 +57,7 @@ class TelegramRouter:
             "INTENT": self._handle_intent_callback,
             "LOCATION": self._handle_location_callback,
             "REQUEST": self._handle_request_callback,
+            "CANCEL_REQUEST": self._handle_cancel_request_callback,
         }
     
     async def route_update(
@@ -816,6 +817,10 @@ class TelegramRouter:
                 to_name = req.get("to_name", "Someone")
                 to_id = req.get("to_user_id")
                 content += f"• Sent to **{to_name}** ({req['status']})\n"
+                buttons.append([
+                    {"text": f"👤 View {to_name}", "callback_data": f"VIEW_PROFILE:{to_id}"},
+                    {"text": f"🚫 Cancel", "callback_data": f"CANCEL_REQUEST:{to_id}"}
+                ])
                 
         return {
             "type": "text",
@@ -1111,6 +1116,13 @@ class TelegramRouter:
         
         try:
             await self.api_client.send_direct_message(target_id, a_message, reply_markup=a_markup)
+            
+            # 3. Notify the notification service
+            await self.api_client.call_notification(
+                str(target_id),
+                "match_accepted",
+                request_id
+            )
         except Exception as e:
             logger.error(f"Failed to notify requester {target_id}: {e}")
             
@@ -1156,6 +1168,30 @@ class TelegramRouter:
         
         return {"type": "text", "content": "❌ **Connection Declined**\n\nRequest declined successfully."}
     
+    async def _handle_cancel_request_callback(
+        self,
+        chat_id: str,
+        telegram_user_id: int,
+        param: Optional[str],
+        request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Handle CANCEL_REQUEST callback (Person A withdraws request to B)."""
+        if not param: return None
+        try:
+            target_id = int(param)
+        except ValueError:
+            return None
+            
+        # Delete the connection record
+        if self.api_client.database.db is not None:
+             await self.api_client.database.db.connections.delete_one({
+                 "from_user_id": telegram_user_id,
+                 "to_user_id": target_id,
+                 "status": "pending"
+             })
+             
+        return {"type": "text", "content": "✅ **Request Withdrawn**\n\nYour connection request has been cancelled."}
+
     async def _handle_request_callback(
         self,
         chat_id: str,

@@ -558,9 +558,22 @@ class InternalAPIClient:
                 "top_k": 5
             }
             
-            # Fetch current connections to exclude from matches
-            connections = await self.database.get_all_connections(telegram_user_id) if self.database else []
-            excluded_ids = {str(c["other_id"]) for c in connections}
+            # Fetch all connections (accepted, pending, or rejected) to exclude from matches
+            if self.database:
+                all_conns_cursor = self.database.db.connections.find({
+                    "$or": [
+                        {"from_user_id": telegram_user_id},
+                        {"to_user_id": telegram_user_id}
+                    ]
+                })
+                excluded_ids = set()
+                async for conn in all_conns_cursor:
+                    if conn.get("from_user_id") == telegram_user_id:
+                        excluded_ids.add(str(conn.get("to_user_id")))
+                    else:
+                        excluded_ids.add(str(conn.get("from_user_id")))
+            else:
+                excluded_ids = set()
             
             result = await self._make_request(
                 f"{self.conversation_url}/conversation/matching",
