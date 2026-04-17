@@ -554,6 +554,7 @@ class InternalAPIClient:
         try:
             payload = {
                 "user_id": str(telegram_user_id),
+                "model_id": self.settings.AI_MODEL_ID,
                 "top_k": 5
             }
             

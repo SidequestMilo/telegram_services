@@ -63,6 +63,8 @@ async def lifespan(app: FastAPI):
     global session_manager, database, rate_limiter, api_client, router, formatter, telegram_http_client
     
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+    logger.info(f"AI Model Configured: {settings.AI_MODEL_ID}")
+
     
     # Initialize components
     database = Database(mongo_uri=settings.MONGO_URI, db_name=settings.MONGO_DB_NAME)
@@ -151,6 +153,17 @@ origins = [
     "http://0.0.0.0:3001",
     "https://admin.lythe.com",
 ]
+
+# Scanner rejection middleware (early return to keep logs clean)
+@app.middleware("http")
+async def block_scanners(request: Request, call_next):
+    """Middleware to block common bot scanners and silence their logs."""
+    path = request.url.path
+    # Common bot/hacker paths to block immediately
+    if any(ext in path for ext in [".php", ".aspx", ".jsp", ".env", "wp-content", "wp-admin", "config.js"]):
+        return Response(status_code=404)
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
