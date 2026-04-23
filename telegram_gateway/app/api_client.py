@@ -555,7 +555,7 @@ class InternalAPIClient:
             payload = {
                 "user_id": str(telegram_user_id),
                 "model_id": self.settings.AI_MODEL_ID,
-                "top_k": 5
+                "top_k": 20
             }
             
             # Fetch all connections (accepted, pending, or rejected) to exclude from matches
@@ -686,9 +686,15 @@ class InternalAPIClient:
                         user_gender = user_profile.get("gender") if user_profile else None
                         
                         if user_gender == "Female":
-                            # Stable sort: Females first (False=0 comes before True=1)
-                            candidates.sort(key=lambda x: x.get("gender") != "Female")
-                            logger.info(f"Prioritized female matches for female user {telegram_user_id}")
+                            # Prioritization: Show 5 females first, then the rest
+                            female_matches = [m for m in candidates if m.get("gender") == "Female"]
+                            other_matches = [m for m in candidates if m.get("gender") != "Female"]
+                            
+                            # Combine: top 5 females (if available), then everyone else
+                            candidates = female_matches[:5] + other_matches
+                            # Limit to a reasonable number total (e.g. 10) or keep all 20
+                            candidates = candidates[:10]
+                            logger.info(f"Prioritized females first for female user {telegram_user_id}")
 
                         candidate = candidates[0]  # Update fallback just in case
                         

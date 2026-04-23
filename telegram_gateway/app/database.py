@@ -223,6 +223,17 @@ class Database:
         except Exception:
             return False
 
+    async def clear_conversations(self, telegram_user_id: int) -> bool:
+        """Clear AI conversation history for a user from DB."""
+        if self.db is None:
+            return False
+        try:
+            await self.db.conversations.delete_many({"telegram_user_id": telegram_user_id})
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing conversations: {e}")
+            return False
+
     async def store_api_request(
         self,
         service_name: str,

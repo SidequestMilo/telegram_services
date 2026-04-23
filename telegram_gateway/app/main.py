@@ -110,7 +110,13 @@ async def lifespan(app: FastAPI):
     # Note: Using a wrapper to avoid circular dependencies or closure issues
     async def _send_re_engage(payload, req_id):
         try:
-            return await send_telegram_message(payload, req_id)
+            tg_uid = payload.get("chat_id")
+            res_ids = await send_telegram_message(payload, req_id, tg_uid, database)
+            if res_ids and database:
+                if isinstance(res_ids, list):
+                    for rid in res_ids: await database.add_message(tg_uid, rid)
+                else: await database.add_message(tg_uid, res_ids)
+            return res_ids
         except httpx.HTTPStatusError as e:
             if e.response.status_code in [400, 403]:
                 # 403: Forbidden (blocked), 400: Bad Request (sometimes means blocked)
@@ -316,7 +322,9 @@ async def telegram_webhook(
             )
             sent_msg_id = await send_telegram_message(
                 formatter.format_rate_limit_message(chat_id),
-                request_id
+                request_id,
+                telegram_user_id,
+                database
             )
             if sent_msg_id:
                 await database.add_message(telegram_user_id, sent_msg_id)
@@ -389,10 +397,11 @@ async def telegram_webhook(
                         
                         # Clear from DB
                         await database.clear_messages(telegram_user_id)
-                        logger.info("Message history cleared from DB", extra={"request_id": request_id})
+                        await database.clear_conversations(telegram_user_id)
+                        logger.info("Message history and conversation logs cleared from DB", extra={"request_id": request_id})
                         
                     except Exception as db_e:
-                         logger.error(f"Error handling message history deletion: {db_e}", extra={"request_id": request_id})
+                         logger.error(f"Error handling history deletion: {db_e}", extra={"request_id": request_id})
 
                     # 2. Rotate session ID to "clear" AI context
                     new_chat_id = str(uuid4())
@@ -417,7 +426,9 @@ async def telegram_webhook(
             logger.error("No response from router", extra={"request_id": request_id})
             sent_msg_id = await send_telegram_message(
                 formatter.format_error_message(chat_id),
-                request_id
+                request_id,
+                telegram_user_id,
+                database
             )
             if sent_msg_id:
                 await database.add_message(telegram_user_id, sent_msg_id)
@@ -456,10 +467,14 @@ async def telegram_webhook(
                     )
         
         # Send response to Telegram
-        sent_msg_id = await send_telegram_message(telegram_payload, request_id)
-        # Store outgoing bot message ID
-        if sent_msg_id:
-            await database.add_message(telegram_user_id, sent_msg_id)
+        sent_ids = await send_telegram_message(telegram_payload, request_id, telegram_user_id, database)
+        # Store outgoing bot message IDs
+        if sent_ids:
+            if isinstance(sent_ids, list):
+                for sid in sent_ids:
+                    await database.add_message(telegram_user_id, sid)
+            else:
+                await database.add_message(telegram_user_id, sent_ids)
         
         logger.info(
             "Update processed successfully",
@@ -481,7 +496,9 @@ async def telegram_webhook(
             if 'chat_id' in locals():
                 sent_msg_id = await send_telegram_message(
                     formatter.format_error_message(chat_id),
-                    request_id
+                    request_id,
+                    telegram_user_id,
+                    database
                 )
                 if sent_msg_id:
                     # We can't easily await database here if we are inside broad exception handler
@@ -526,17 +543,23 @@ def extract_user_info(update: Dict[str, Any]) -> Tuple[Optional[int], Optional[i
     return None, None, None, None, None
 
 
-async def send_telegram_message(payload: Any, request_id: str) -> Optional[int]:
+async def send_telegram_message(payload: Any, request_id: str, telegram_user_id: Optional[int] = None, database: Optional[Any] = None) -> Any:
     """
     Send formatted payload to Telegram API.
     Handles single Dict payloads, lists of payloads, and photo messages.
+    Returns: message_id (int) or list of message_ids if multiple sent.
     """
     if isinstance(payload, list):
-        last_id = None
+        ids = []
         # Process multi-payloads (e.g. match cards)
         for p in payload:
-            last_id = await send_telegram_message(p, request_id)
-        return last_id
+            res_id = await send_telegram_message(p, request_id, telegram_user_id, database)
+            if res_id:
+                if isinstance(res_id, list):
+                    ids.extend(res_id)
+                else:
+                    ids.append(res_id)
+        return ids
         
     if not isinstance(payload, dict):
         return None
@@ -563,10 +586,10 @@ async def send_telegram_message(payload: Any, request_id: str) -> Optional[int]:
             response.raise_for_status()
             result = response.json()
             
-            # Log bot response to our conversations table
-            if chat_id:
-                bot_text = payload.get("text") or payload.get("caption") or "[Photo Message]"
-                await database.log_conversation(chat_id, "bot", bot_text, request_id)
+            # Log bot response to our database if available
+            if database and telegram_user_id:
+                bot_text = payload.get("text") or payload.get("caption") or "[Photo/Media Message]"
+                await database.log_conversation(telegram_user_id, "bot", bot_text, request_id)
 
             logger.info(
                 f"Telegram message sent successfully via {endpoint}",
