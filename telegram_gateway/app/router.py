@@ -542,7 +542,7 @@ class TelegramRouter:
         ]
         
         content = (
-            "Hey, I’m Milo ☕️\n\n"
+            "Hi! I’m Milo ☕️\n\n"
             "I’m here to help you find people you’ll actually click with through shared interests, intentions, and real-life events.\n\n"
             "Think: gym buddy, study buddy, event buddy, hobby friend - whatever fits where you’re at right now.\n\n"
             "I’ll get to know you a little first so I can suggest the right people, communities, and events for you.\n\n"
